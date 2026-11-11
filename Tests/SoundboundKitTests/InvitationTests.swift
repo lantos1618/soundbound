@@ -29,6 +29,18 @@ final class InvitationTests: XCTestCase {
         let invite = Invitation(peer: PeerCard(publicKey: other.publicKey, name: "Mac", kind: "mac"), nonce: UUID().uuidString, expires: Date().addingTimeInterval(600))
         XCTAssertThrowsError(try SignedEnvelope.from(link: identity.sign(invite).link))
     }
+    func testCompactQRBindsToCurrentDeviceAndInvitationCode() throws {
+        let identity = try Identity(ephemeral: true)
+        let store = HubStore(identity: identity, defaults: UserDefaults(suiteName: "qr-test." + UUID().uuidString)!)
+        let components = try XCTUnwrap(URLComponents(string: store.nearbyInviteLink))
+        XCTAssertEqual(components.host, "pair")
+        XCTAssertEqual(components.queryItems?.first(where: { $0.name == "id" })?.value, identity.id)
+        XCTAssertEqual(components.queryItems?.first(where: { $0.name == "code" })?.value, store.friendCode)
+        XCTAssertLessThan(store.nearbyInviteLink.count, store.inviteLink.count)
+        store.join(codeOrLink: store.nearbyInviteLink)
+        XCTAssertTrue(store.outgoing.isEmpty)
+        XCTAssertTrue(store.friends.isEmpty)
+    }
     func testRoomDraftStartsWithNoOmniAndHalfVolume() throws {
         let room = AudioRoom(name: "Desk", region: "Home", owner: "owner")
         XCTAssertFalse(room.omni)

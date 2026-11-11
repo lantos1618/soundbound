@@ -320,12 +320,23 @@ public final class HubStore: ObservableObject {
         friends.removeAll { $0.id == id }; peerRooms[id] = nil; peerMemberships[id] = nil; save()
         notice = "Removed locally. No live audio routes exist in this build."
     }
+    public var nearbyInviteLink: String {
+        "soundbound://pair?id=" + deviceID + "&code=" + friendCode
+    }
     public func join(codeOrLink input: String) {
         let value = input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard identity != nil else { notice = InviteError.unavailable.localizedDescription; return }
         do {
             let peer: NearbyPeer
-            if value.hasPrefix("soundbound:") {
+            if let link = URLComponents(string: value), link.scheme == "soundbound", link.host == "pair" {
+                guard let id = link.queryItems?.first(where: { $0.name == "id" })?.value,
+                      let code = link.queryItems?.first(where: { $0.name == "code" })?.value,
+                      let found = nearby.first(where: { $0.id == id && $0.invitation.code == code && $0.invitation.expires > Date() }) else {
+                    notice = "Open Discover on both devices, then scan again. This code only works nearby."; return
+                }
+                guard id != deviceID else { throw InviteError.ownIdentity }
+                peer = found
+            } else if value.hasPrefix("soundbound:") {
                 let (_, invitation) = try SignedEnvelope.from(link: value)
                 guard invitation.peer.id != deviceID else { throw InviteError.ownIdentity }
                 guard let found = nearby.first(where: { $0.id == invitation.peer.id && $0.invitation.nonce == invitation.nonce }) else {

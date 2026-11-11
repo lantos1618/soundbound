@@ -82,7 +82,7 @@ struct CameraScanner: UIViewRepresentable {
         func stop() { queue.async { self.stopped = true; self.session.stopRunning() } }
         func metadataOutput(_ output: AVCaptureMetadataOutput, didOutput metadataObjects: [AVMetadataObject], from connection: AVCaptureConnection) {
             guard !delivered, let value = (metadataObjects.first as? AVMetadataMachineReadableCodeObject)?.stringValue else { return }
-            guard value.hasPrefix("soundbound://invite?") else { error("That isn’t a Soundbound code."); return }
+            guard value.hasPrefix("soundbound://invite?") || value.hasPrefix("soundbound://pair?") else { error("That isn’t a Soundbound code."); return }
             delivered = true; stop(); completion(value)
         }
     }

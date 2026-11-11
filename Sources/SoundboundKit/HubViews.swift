@@ -999,7 +999,7 @@ public struct AddFriendView: View {
                     Text(scanning ? "Point your camera at a Soundbound code." : "They scan. You approve.").font(.subheadline)
                 }.foregroundStyle(.white).multilineTextAlignment(.center)
                 #if os(iOS)
-                Button(scanning ? "Show my code" : "Scan a code") { scanning.toggle(); cameraError = nil }
+                Button(scanning ? "Show my code" : "Scan a code") { scanning.toggle(); cameraError = nil; if scanning { store.setDiscovery(true) } }
                     .buttonStyle(.bordered).tint(.white)
                 #endif
                 Spacer(minLength: 0)
@@ -1010,7 +1010,7 @@ public struct AddFriendView: View {
                     if let cameraError { Text(cameraError).font(.caption).foregroundStyle(.white) }
                 } else {
                     VStack(spacing: 10) {
-                        QRCode(value: store.inviteLink).frame(width: 230, height: 230)
+                        QRCode(value: store.nearbyInviteLink).frame(width: 230, height: 230)
                         Text(store.friendCode).font(.system(size: 23, weight: .semibold, design: .monospaced)).tracking(3)
                             .foregroundStyle(.black).textSelection(.enabled)
                     }

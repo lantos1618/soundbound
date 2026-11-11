@@ -8,7 +8,7 @@ A native macOS and iOS app for managing audio devices and sharing sound with per
 
 - Discover local inputs, outputs, Bluetooth headphones, and nearby Soundbound devices.
 - Select the Mac’s output or microphone and adjust supported hardware volume.
-- Pair devices using a code card, an inline iPhone camera scanner, short codes, nearby discovery, and explicit approval.
+- Pair devices using a compact nearby QR code card, an inline iPhone camera scanner, short codes, nearby discovery, and explicit approval.
 - Send a short test tone or share a microphone with one paired receiver.
 - Stop audio from either device. Microphone capture starts only after permission and receiver approval.
 - Organize local and paired devices into rooms. Local and paired devices can belong to multiple rooms. Inputs and outputs sit beneath their host device. Adding the host includes its attached components; individual components can also be added separately. Room definitions and layouts mirror from their creating device to nearby paired devices; edits stay on the creating device. Membership does not grant audio access.

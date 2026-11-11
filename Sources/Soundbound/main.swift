@@ -309,6 +309,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if hubWindow == nil {
             let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1020, height: 720), styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
             window.title = "Soundbound"
+            window.titleVisibility = .hidden
             window.titlebarAppearsTransparent = true
             window.isReleasedWhenClosed = false
             window.contentViewController = NSHostingController(rootView: DesktopHubView(store: hub, audio: model))

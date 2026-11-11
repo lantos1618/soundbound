@@ -11,7 +11,7 @@ A native macOS and iOS app for managing audio devices and sharing sound with per
 - Pair devices using signed QR invitations, short codes, and explicit approval.
 - Send a short test tone or share a microphone with one paired receiver.
 - Stop audio from either device. Microphone capture starts only after permission and receiver approval.
-- Organize local and paired devices into rooms. Local and paired devices can belong to multiple rooms. These assignments are local organization, not remote-control grants.
+- Organize local and paired devices into rooms. Local and paired devices can belong to multiple rooms. Inputs and outputs sit beneath their host device. Adding the host includes its attached components; individual components can also be added separately. These assignments are local organization, not remote-control grants.
 - Configure per-device change confirmations, notifications, and removal after a sustained disconnect.
 - Test a room’s outputs and paired receivers, or record a three-second microphone check for local replay. Test recordings remain in memory until the panel closes.
 
@@ -34,7 +34,7 @@ Audio is encrypted directly between the source and receiver:
 - AES-256-GCM encrypts and authenticates packets. Sequence checks reject replay within the connection.
 - The receiver proves possession of its session key before the source starts capturing a microphone.
 
-Discovery and pairing metadata—including device names and public keys—is **not encrypted**. Nearby names are not proof of identity; verify fingerprints before trusting a device. Traffic timing and size remain visible. Audio is decrypted in device memory for playback.
+Discovery, pairing, and paired-device inventory metadata—including device names, attached audio devices, and public keys—is **not encrypted**. Nearby names are not proof of identity; verify fingerprints before trusting a device. Traffic timing and size remain visible. Audio is decrypted in device memory for playback.
 
 This is a custom prototype protocol built with Apple CryptoKit, **not an independently audited secure transport**. Do not treat it as production-grade security for sensitive audio.
 

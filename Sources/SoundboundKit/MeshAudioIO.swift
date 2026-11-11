@@ -28,11 +28,11 @@ final class MeshAudioIO {
         toneTimer = timer
         timer.schedule(deadline: .now(), repeating: 0.02)
         timer.setEventHandler {
-            guard offset < 24_000 else { return }
+            guard offset < 6_240 else { return }
             let samples: [Int16] = (0..<480).map { index in
                 let t = Double(offset + index) / 24_000
-                let fade = min(1, min(t / 0.05, max(0, (1 - t) / 0.05)))
-                return Int16(sin(t * 2 * .pi * 440) * 1000 * fade)
+                let fade = min(1, min(t / 0.05, max(0, (0.26 - t) / 0.06)))
+                return Int16(sin(2 * .pi * (660 * t - 440 * t * t)) * 1000 * fade)
             }
             offset += 480
             frame(samples.withUnsafeBytes { Data($0) })

@@ -33,7 +33,11 @@ public final class HubStore: ObservableObject {
     private let defaults: UserDefaults
     private let persistenceKey: String
     public let mesh = AudioMesh()
-    private let network = LocalNetwork()
+    let network = LocalNetwork()
+    @Published public internal(set) var peerAudioDevices: [String: [LocalAudioDevice]] = [:]
+    var reportedAudioDevices: [LocalAudioDevice] = []
+    var lastInventoryRefresh = Date.distantPast
+    var inventoryPending: Set<String> = []
     private var pendingReplies: [String: (SignedEnvelope) -> Void] = [:]
     private var issuedNonces: [String: Date] = [:]
     private var receivedIDs: Set<String> = []
@@ -223,6 +227,8 @@ public final class HubStore: ObservableObject {
         persist()
     }
     public func observeAudioDevices(_ devices: [LocalAudioDevice], now: Date = Date()) {
+        reportedAudioDevices = devices
+        refreshPeerInventories(now: now)
         var current = Dictionary(devices.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         for (id, old) in lastAudioDevices where current[id] == nil {
             var missing = old
@@ -235,7 +241,7 @@ public final class HubStore: ObservableObject {
                 if old.isAvailable && !device.isAvailable {
                     audioNotice = "\(device.name) disconnected."
                 } else if old.selectedOutput != device.selectedOutput {
-                    audioNotice = device.selectedOutput ? "Mac sound moved to \(device.name)." : "Mac sound moved away from \(device.name)."
+                    audioNotice = device.selectedOutput ? "Sound moved to \(device.name)." : "Sound moved away from \(device.name)."
                 } else if old.selectedInput != device.selectedInput {
                     audioNotice = device.selectedInput ? "Microphone changed to \(device.name)." : "Microphone moved away from \(device.name)."
                 }
@@ -262,6 +268,12 @@ public final class HubStore: ObservableObject {
         if let roomID { peerMemberships[id, default: []].insert(roomID) } else { peerMemberships[id] = nil }
         peerRooms[id] = roomID
         persist()
+    }
+
+    /// A whole-device room assignment includes its currently attached audio components.
+    /// Explicit component memberships remain independent of the parent assignment.
+    public func audioDevice(_ id: String, belongsTo roomID: String) -> Bool {
+        deviceRooms.contains(roomID) || audioMemberships[id]?.contains(roomID) == true
     }
 
     public func moveAudioDevice(_ id: String, to roomID: String?) {
@@ -292,6 +304,7 @@ public final class HubStore: ObservableObject {
 
     public func removeFriend(_ id: String) {
         mesh.stop()
+        peerAudioDevices[id] = nil
         friends.removeAll { $0.id == id }; peerRooms[id] = nil; peerMemberships[id] = nil; save()
         notice = "Removed locally. No live audio routes exist in this build."
     }
@@ -341,6 +354,7 @@ public final class HubStore: ObservableObject {
         }
     }
     func receive(_ envelope: SignedEnvelope, respond: @escaping (SignedEnvelope) -> Void) {
+        if answerInventory(envelope, respond: respond) { return }
         if let identity, mesh.receive(envelope, nearby: nearby, friends: friends, identity: identity, card: card, respond: respond) { return }
         guard let message = try? envelope.verified(as: JoinMessage.self), message.version == 1,
               message.peer.publicKey == envelope.signer, message.peer.id != deviceID,

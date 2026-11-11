@@ -66,7 +66,7 @@ public enum LocalAudioAction {
 }
 
 /// A device reported by the host OS, separate from a paired Soundbound peer.
-public struct LocalAudioDevice: Identifiable, Equatable {
+public struct LocalAudioDevice: Identifiable, Equatable, Codable {
     public let id: String
     public let name: String
     public let icon: String

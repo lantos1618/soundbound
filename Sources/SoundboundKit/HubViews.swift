@@ -378,10 +378,15 @@ private struct HomeView: View {
                         ForEach(localAudioDevices) { device in
                             Divider().padding(.leading, 76)
                             LocalAudioRow(device: device, store: store, action: onAudioAction, volumeChanged: onAudioVolume)
+                                .padding(.leading, 32)
                         }
                         ForEach(store.friends) { peer in
                             Divider().padding(.leading, 76)
                             peerRow(peer)
+                            ForEach(store.peerAudioDevices[peer.id] ?? []) { component in
+                                remoteComponentRow(component, peer: peer)
+                                    .padding(.leading, 32)
+                            }
                         }
                     }
                     .padding(.horizontal, 18).padding(.vertical, 4)
@@ -417,7 +422,7 @@ private struct HomeView: View {
                                     Button("Test sound…") { testingRoom = room }
                                     Button("Room settings") { roomSettings = room }
                                     if !store.deviceRooms.contains(room.id) {
-                                        Button("Move this device here") { store.moveDevice(to: room.id) }
+                                        Button("Add this device here") { store.moveDevice(to: room.id) }
                                     } else {
                                         Button("Remove this device from room") { store.removeDevice(from: room.id) }
                                     }
@@ -428,18 +433,29 @@ private struct HomeView: View {
                             Divider()
                             VStack(spacing: 0) {
                                 if store.deviceRooms.contains(room.id) { roomDeviceRow(stacked: false) }
-                                ForEach(localAudioDevices.filter { store.audioMemberships[$0.id]?.contains(room.id) == true }) { device in
-                                    if store.deviceRooms.contains(room.id) || localAudioDevices.first(where: { store.audioMemberships[$0.id]?.contains(room.id) == true })?.id != device.id {
+                                ForEach(localAudioDevices.filter { store.audioDevice($0.id, belongsTo: room.id) }) { device in
+                                    if store.deviceRooms.contains(room.id) || localAudioDevices.first(where: { store.audioDevice($0.id, belongsTo: room.id) })?.id != device.id {
                                         Divider().padding(.leading, 76)
                                     }
                                     LocalAudioRow(device: device, store: store, action: onAudioAction, volumeChanged: onAudioVolume)
+                                        .padding(.leading, store.deviceRooms.contains(room.id) ? 32 : 0)
                                 }
                                 ForEach(store.friends.filter { store.peerMemberships[$0.id]?.contains(room.id) == true }) { peer in
                                     Divider().padding(.leading, 76)
                                     peerRow(peer)
+                                    ForEach(store.peerAudioDevices[peer.id] ?? []) { component in
+                                        remoteComponentRow(component, peer: peer).padding(.leading, 32)
+                                    }
+                                }
+                                ForEach(store.friends.filter { store.peerMemberships[$0.id]?.contains(room.id) != true }) { peer in
+                                    ForEach((store.peerAudioDevices[peer.id] ?? []).filter {
+                                        store.audioMemberships[HubStore.remoteComponentID(peer: peer.id, component: $0.id)]?.contains(room.id) == true
+                                    }) { component in
+                                        remoteComponentRow(component, peer: peer)
+                                    }
                                 }
                             }
-                            Label(hoveredRoom == room.id ? "Release to move here" : "Drop a device here", systemImage: "plus")
+                            Label(hoveredRoom == room.id ? "Release to add here" : "Drop a device here", systemImage: "plus")
                                 .font(.caption).foregroundStyle(hoveredRoom == room.id ? Color.accentColor : Color.secondary)
                                 .padding(12).frame(maxWidth: .infinity)
                                 .background(Color.primary.opacity(0.02), in: RoundedRectangle(cornerRadius: 10))
@@ -464,7 +480,7 @@ private struct HomeView: View {
             .frame(maxWidth: .infinity, alignment: .center)
         }
         .background(canvasColor)
-        .navigationTitle("Soundbound")
+        .navigationTitle("")
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
         #endif
@@ -512,6 +528,13 @@ private struct HomeView: View {
                     let id = String(value.dropFirst(6))
                     guard localAudioDevices.contains(where: { $0.id == id }) else { return }
                     store.moveAudioDevice(id, to: roomID)
+                } else if value.hasPrefix("remote:") {
+                    guard store.friends.contains(where: { peer in
+                        (store.peerAudioDevices[peer.id] ?? []).contains {
+                            HubStore.remoteComponentID(peer: peer.id, component: $0.id) == value
+                        }
+                    }) else { return }
+                    store.moveAudioDevice(value, to: roomID)
                 } else if value.hasPrefix("peer:") {
                     store.movePeer(String(value.dropFirst(5)), to: roomID)
                 }
@@ -519,6 +542,32 @@ private struct HomeView: View {
         }
         return true
     }
+    private func remoteComponentRow(_ component: LocalAudioDevice, peer: KnownPeer) -> some View {
+        let id = HubStore.remoteComponentID(peer: peer.id, component: component.id)
+        return HStack(spacing: 8) {
+            DeviceDragHandle(id: id, name: component.name)
+            Image(systemName: component.icon).font(.system(size: 21)).foregroundStyle(.secondary)
+                .frame(width: 36, height: 36)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(component.name).font(.system(size: 14, weight: .medium))
+                Text(peer.card.name + " · " + (component.hasInput && component.hasOutput ? "Input & output" : component.hasInput ? "Microphone" : "Audio output"))
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            Spacer()
+            Text(component.selectedOutput || component.selectedInput ? "In use" : component.isAvailable ? "Available" : "Not connected")
+                .font(.caption).foregroundStyle(.secondary)
+            Color.clear.frame(width: 24, height: 24)
+        }
+        .padding(.vertical, 10)
+        .modifier(DeviceDragArea(id: id, name: component.name))
+        .contextMenu {
+            ForEach(store.rooms) { room in
+                Button("Add to \(room.name)") { store.moveAudioDevice(id, to: room.id) }
+            }
+            Button("Remove from all rooms") { store.moveAudioDevice(id, to: nil) }
+        }
+    }
+
     private func peerRow(_ peer: KnownPeer) -> some View {
         HomeDeviceRow(name: peer.card.name, owner: "Paired device", kind: peer.card.kind,
             nearby: store.nearby.contains { $0.id == peer.id }, dragID: "peer:" + peer.id)
@@ -568,7 +617,7 @@ private struct RoomAudioTestView: View {
                 VStack(alignment: .leading, spacing: 22) {
                     Text(room.name).font(.title2.weight(.medium))
                     Text("Choose a device for a quiet test tone.").font(.subheadline).foregroundStyle(.secondary)
-                    ForEach(devices.filter { $0.hasOutput && store.audioMemberships[$0.id]?.contains(room.id) == true }) { device in
+                    ForEach(devices.filter { $0.hasOutput && store.audioDevice($0.id, belongsTo: room.id) }) { device in
                         HStack {
                             Label(device.name, systemImage: device.icon)
                             Spacer()
@@ -738,7 +787,7 @@ private struct RoomView: View {
                         Label(store.name, systemImage: HubStore.kind == "mac" ? "laptopcomputer" : "iphone")
                     } else {
                         Text("This device hasn’t joined the room yet.").font(.subheadline).foregroundStyle(.secondary)
-                        Button("Move this device here") { store.moveDevice(to: room.id) }.buttonStyle(.bordered)
+                        Button("Add this device here") { store.moveDevice(to: room.id) }.buttonStyle(.bordered)
                     }
                 }
                 DetailSection(title: "Playback level") {

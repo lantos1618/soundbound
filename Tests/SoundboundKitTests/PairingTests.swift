@@ -38,6 +38,21 @@ final class PairingTests: XCTestCase {
         XCTAssertEqual(hub.audioMemberships["headset"], Set([two]))
     }
 
+    func testHostMembershipIncludesComponentsWithoutOverwritingIndividualRooms() throws {
+        let hub = try store()
+        hub.addRoom(name: "Desk", region: "Home", policy: .request)
+        hub.addRoom(name: "Studio", region: "Home", policy: .request)
+        let desk = hub.rooms[0].id, studio = hub.rooms[1].id
+        hub.moveDevice(to: desk)
+        hub.moveAudioDevice("headset", to: studio)
+        XCTAssertTrue(hub.audioDevice("speaker", belongsTo: desk))
+        XCTAssertTrue(hub.audioDevice("headset", belongsTo: desk))
+        XCTAssertTrue(hub.audioDevice("headset", belongsTo: studio))
+        hub.removeDevice(from: desk)
+        XCTAssertFalse(hub.audioDevice("headset", belongsTo: desk))
+        XCTAssertTrue(hub.audioDevice("headset", belongsTo: studio))
+    }
+
     func testOnlyPairedPeersCanBeGroupedAndGroupingPersists() throws {
         let defaults = UserDefaults(suiteName: "app.soundbound.peer-test.\(UUID().uuidString)")!
         let identity = try Identity(ephemeral: true)
@@ -66,6 +81,27 @@ final class PairingTests: XCTestCase {
         XCTAssertEqual(restored.peerRooms[card.id], room.id)
         restored.movePeer(card.id, to: nil)
         XCTAssertNil(restored.peerRooms[card.id])
+    }
+
+    func testInventoryOnlyAnswersPairedSignedRequestsForThisHost() throws {
+        let host = try store(), guest = try Identity(ephemeral: true)
+        let request = InventoryRequest(recipient: host.deviceID)
+        var replied = false
+        host.receive(try guest.sign(request)) { _ in replied = true }
+        XCTAssertFalse(replied)
+        let (_, invite) = try SignedEnvelope.from(link: host.inviteLink)
+        let card = PeerCard(publicKey: guest.publicKey, name: "Phone", kind: "iphone")
+        let join = JoinMessage(requestID: UUID().uuidString, inviteNonce: invite.nonce, peer: card, created: Date())
+        host.receive(try guest.sign(join)) { _ in }
+        host.decide(try XCTUnwrap(host.requests.first), approve: true)
+        var response: SignedEnvelope?
+        host.receive(try guest.sign(request)) { response = $0 }
+        let reply = try XCTUnwrap(response).verified(as: InventoryReply.self)
+        XCTAssertEqual(reply.requestID, request.id)
+        XCTAssertEqual(reply.recipient, guest.id)
+        response = nil
+        host.receive(try guest.sign(InventoryRequest(recipient: "another-host"))) { response = $0 }
+        XCTAssertNil(response)
     }
 
     func testDecliningDoesNotAddFriend() throws {

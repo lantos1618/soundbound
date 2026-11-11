@@ -390,12 +390,12 @@ final class SoundModel: NSObject, ObservableObject {
         do {
             try engine.outputNode.auAudioUnit.setDeviceID(output.id)
             let format = AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 2)!
-            let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 24_000)!
+            let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 12_000)!
             buffer.frameLength = buffer.frameCapacity
             for i in 0..<Int(buffer.frameLength) {
                 let t = Double(i) / 48_000
-                let fade = max(0, min(1, min(t / 0.03, (0.5 - t) / 0.03)))
-                let sample = Float(sin(t * 2 * .pi * 440) * 0.03 * fade)
+                let fade = max(0, min(1, min(t / 0.03, (0.25 - t) / 0.06)))
+                let sample = Float(sin(2 * .pi * (660 * t - 440 * t * t)) * 0.03 * fade)
                 buffer.floatChannelData![0][i] = sample; buffer.floatChannelData![1][i] = sample
             }
             engine.attach(player); engine.connect(player, to: engine.mainMixerNode, format: format)

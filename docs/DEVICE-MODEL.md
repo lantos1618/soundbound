@@ -15,4 +15,12 @@ The device view should make these things understandable:
 
 Room membership is organization, not proof of physical location. Local audio enumeration is not proof that a device is playing sound, and an offline device must not be presented as controllable. A missing device can retain its name and group without pretending that it is reachable.
 
-The next network work must connect this device model to authenticated presence and explicit control requests, followed by encrypted media transport. The existing local controls and signed pairing are foundations; they are not yet a working audio mesh.
+## Current behavior
+
+Inputs and outputs are nested under the host that reports them. Nearby paired hosts exchange signed inventory snapshots every five seconds; this metadata is visible on the local network. A remote row reports the other host’s state and does not grant remote control of that output.
+
+Dragging a host into a room includes its attached components. Components can also have independent room memberships. Removing the parent from one room does not erase those independent assignments. Rooms remain local organization; they are not synchronized between hosts yet.
+
+Local route changes can request confirmation before Soundbound performs them. Changes initiated by Apple are observed afterward. A disconnect alone cannot prove which other host took ownership, so Soundbound must not describe it as an intercepted transfer request.
+
+One source can stream encrypted audio to one paired receiver after approval. Multi-source mixing, remote route selection, and synchronized room playback remain future work.

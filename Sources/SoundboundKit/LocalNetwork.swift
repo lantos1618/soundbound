@@ -107,9 +107,9 @@ final class LocalNetwork: NSObject, NetServiceBrowserDelegate, NetServiceDelegat
         connections.removeValue(forKey: id)?.cancel()
     }
     private func readEnvelope(_ connection: NWConnection, data: Data = Data(), completion: @escaping (Result<SignedEnvelope, Error>) -> Void) {
-        connection.receive(minimumIncompleteLength: 1, maximumLength: 16_384) { [weak self] chunk, _, done, error in
+        connection.receive(minimumIncompleteLength: 1, maximumLength: 65_536) { [weak self] chunk, _, done, error in
             var combined = data; if let chunk { combined.append(chunk) }
-            if combined.count > 16_384 { completion(.failure(InviteError.malformed)); return }
+            if combined.count > 65_536 { completion(.failure(InviteError.malformed)); return }
             if let end = combined.firstIndex(of: 10) {
                 do { completion(.success(try JSONDecoder().decode(SignedEnvelope.self, from: combined.prefix(upTo: end)))) }
                 catch { completion(.failure(InviteError.malformed)) }; return
@@ -142,7 +142,8 @@ final class LocalNetwork: NSObject, NetServiceBrowserDelegate, NetServiceDelegat
         let connection = NWConnection(host: NWEndpoint.Host(endpoint.host), port: port, using: parameters)
         let id = keep(connection)
         // The signed request and reply contain public pairing metadata only.
-        // No audio, tokens, private keys, or private room lists use this channel.
+        // No audio, tokens, or private keys use this channel. Paired hosts may
+        // exchange signed device inventories and room layouts.
         var completed = false
         func complete(_ result: Result<SignedEnvelope, Error>) {
             guard !completed else { return }; completed = true

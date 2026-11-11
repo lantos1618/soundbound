@@ -9,6 +9,7 @@ struct Output: Identifiable {
     let uid: String
     let name: String
     let bluetooth: Bool
+    var transport: UInt32 = 0
 }
 
 enum Audio {
@@ -54,7 +55,7 @@ enum Audio {
             guard AudioObjectGetPropertyDataSize(id, &streams, 0, nil, &bytes) == noErr, bytes > 0 else { return nil }
             var transport: UInt32 = 0
             _ = read(id, kAudioDevicePropertyTransportType, into: &transport)
-            return Output(id: id, uid: string(id, kAudioDevicePropertyDeviceUID), name: string(id, kAudioObjectPropertyName), bluetooth: transport == kAudioDeviceTransportTypeBluetooth || transport == kAudioDeviceTransportTypeBluetoothLE)
+            return Output(id: id, uid: string(id, kAudioDevicePropertyDeviceUID), name: string(id, kAudioObjectPropertyName), bluetooth: transport == kAudioDeviceTransportTypeBluetooth || transport == kAudioDeviceTransportTypeBluetoothLE, transport: transport)
         }.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
     }
 
@@ -125,6 +126,13 @@ final class SoundModel: NSObject, ObservableObject {
                 icon: device.bluetooth ? "headphones" : (output != nil ? "speaker.wave.2" : "mic"),
                 detail: "This Mac · " + role,
                 status: operationID == id ? "Applying…" : (output?.uid == targetOutput?.uid && output != nil && hasVerifiedSound ? "Sound confirmed" : status))
+            switch device.transport {
+            case kAudioDeviceTransportTypeBluetooth, kAudioDeviceTransportTypeBluetoothLE: row.connection = .bluetooth
+            case kAudioDeviceTransportTypeContinuityCaptureWired, kAudioDeviceTransportTypeContinuityCaptureWireless: row.connection = .continuity
+            case kAudioDeviceTransportTypeBuiltIn: row.connection = .builtIn
+            case kAudioDeviceTransportTypeVirtual, kAudioDeviceTransportTypeAggregate: row.connection = .virtual
+            default: row.connection = .wired
+            }
             row.hasInput = input != nil; row.hasOutput = output != nil
             row.selectedInput = selectedInput; row.selectedOutput = selectedOutput
             row.canDisconnect = device.bluetooth && paired.contains { matches(device, $0) }
@@ -139,6 +147,7 @@ final class SoundModel: NSObject, ObservableObject {
                 name: device.name ?? "Bluetooth audio device", icon: "headphones",
                 detail: "Paired with this Mac", status: connecting && isTracked(device) ? "Connecting…" : (device.isConnected() ? "Bluetooth connected" : "Not connected"))
             row.isAvailable = device.isConnected()
+            row.connection = .bluetooth
             row.canConnect = true; row.canDisconnect = device.isConnected(); row.busy = busy
             rows.append(row)
         }
@@ -147,6 +156,7 @@ final class SoundModel: NSObject, ObservableObject {
                 name: watchedName, icon: "headphones", detail: "Saved headphones",
                 status: connecting ? "Connecting…" : (pairedLookupInProgress ? "Checking Bluetooth…" : "Not available to this Mac"))
             row.isAvailable = false; row.isChecking = pairedLookupInProgress
+            row.connection = .bluetooth
             row.canConnect = watchedAddress != nil; row.busy = busy
             rows.append(row)
         }

@@ -26,12 +26,12 @@ struct ScannerScreen: View {
     }
 }
 
-private final class PreviewView: UIView {
+final class PreviewView: UIView {
     override class var layerClass: AnyClass { AVCaptureVideoPreviewLayer.self }
     var preview: AVCaptureVideoPreviewLayer { layer as! AVCaptureVideoPreviewLayer }
 }
 
-private struct CameraScanner: UIViewRepresentable {
+struct CameraScanner: UIViewRepresentable {
     let completion: (String?) -> Void
     let error: (String) -> Void
     func makeCoordinator() -> Coordinator { Coordinator(completion: completion, error: error) }

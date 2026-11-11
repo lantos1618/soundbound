@@ -15,14 +15,21 @@ final class PhoneAudioModel: ObservableObject {
     deinit { if let observer { NotificationCenter.default.removeObserver(observer) } }
     private func refresh() {
         let route = AVAudioSession.sharedInstance().currentRoute
-        let outputs = route.outputs.map { port in
-            LocalAudioDevice(id: port.uid, name: port.portName,
-                icon: port.portType == .builtInSpeaker || port.portType == .builtInReceiver ? "speaker.wave.2" : "headphones",
+        let outputs = route.outputs.map { port -> LocalAudioDevice in
+            let builtIn = port.portType == .builtInSpeaker || port.portType == .builtInReceiver
+            var device = LocalAudioDevice(id: port.uid, name: builtIn ? UIDevice.current.name + " Speaker" : port.portName,
+                icon: builtIn ? "speaker.wave.2" : "headphones",
                 detail: "This iPhone · Audio output", status: "Current route")
+            device.hasOutput = true; device.selectedOutput = true
+            device.connection = builtIn ? .builtIn : ([.bluetoothA2DP, .bluetoothHFP, .bluetoothLE].contains(port.portType) ? .bluetooth : .wired)
+            return device
         }
-        let inputs = route.inputs.map { port in
-            LocalAudioDevice(id: "input:" + port.uid, name: port.portName,
+        let inputs = route.inputs.map { port -> LocalAudioDevice in
+            var device = LocalAudioDevice(id: "input:" + port.uid, name: port.portName,
                 icon: "mic", detail: "This iPhone · Microphone input", status: "Current route")
+            device.hasInput = true; device.selectedInput = true
+            device.connection = port.portType == .builtInMic ? .builtIn : (port.portType == .bluetoothHFP ? .bluetooth : .wired)
+            return device
         }
         devices = outputs + inputs
     }

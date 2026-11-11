@@ -1,9 +1,12 @@
 import Foundation
 import Combine
+#if os(iOS)
+import UIKit
+#endif
 
 public final class HubStore: ObservableObject {
     @Published public var name: String
-    @Published public private(set) var rooms: [AudioRoom]
+    @Published public internal(set) var rooms: [AudioRoom]
     @Published public private(set) var friends: [KnownPeer]
     @Published public private(set) var nearby: [NearbyPeer] = []
     @Published public private(set) var requests: [AccessRequest] = []
@@ -14,9 +17,9 @@ public final class HubStore: ObservableObject {
     @Published public private(set) var inviteLink = ""
     @Published public private(set) var friendCode = "—"
     @Published public private(set) var deviceRoom: String?
-    @Published public private(set) var deviceRooms: Set<String>
-    @Published public private(set) var audioMemberships: [String: Set<String>]
-    @Published public private(set) var peerMemberships: [String: Set<String>]
+    @Published public internal(set) var deviceRooms: Set<String>
+    @Published public internal(set) var audioMemberships: [String: Set<String>]
+    @Published public internal(set) var peerMemberships: [String: Set<String>]
     @Published public private(set) var peerRooms: [String: String]
     @Published public private(set) var audioPolicies: [String: AudioDevicePolicy]
     public var onAudioNotice: ((String) -> Void)?
@@ -33,6 +36,10 @@ public final class HubStore: ObservableObject {
     private let defaults: UserDefaults
     private let persistenceKey: String
     public let mesh = AudioMesh()
+    @Published public internal(set) var deviceMoveRequest: DeviceMoveRequest?
+    public var onApprovedDeviceMove: ((String) -> Void)?
+    var moveReply: ((SignedEnvelope) -> Void)?
+    var seenMoveRequests: [String: Date] = [:]
     let network = LocalNetwork()
     @Published public internal(set) var peerAudioDevices: [String: [LocalAudioDevice]] = [:]
     var reportedAudioDevices: [LocalAudioDevice] = []
@@ -54,6 +61,13 @@ public final class HubStore: ObservableObject {
         return "mac"
         #endif
     }
+    public static var systemDeviceName: String {
+        #if os(iOS)
+        return UIDevice.current.name
+        #else
+        return Host.current().localizedName ?? ProcessInfo.processInfo.hostName
+        #endif
+    }
     public var fingerprint: String { String(deviceID.prefix(8)).uppercased() }
     public var regions: [String] { Array(Set(rooms.map(\.region))).sorted() }
 
@@ -63,11 +77,8 @@ public final class HubStore: ObservableObject {
         self.identity = identity
         let savedData = defaults.data(forKey: persistenceKey) ?? defaults.data(forKey: "SoundboundHub.v1")
         let saved = savedData.flatMap { try? JSONDecoder().decode(SavedHub.self, from: $0) }
-        #if os(iOS)
-        name = saved?.name ?? "My iPhone"
-        #else
-        name = saved?.name ?? "My Mac"
-        #endif
+        let savedName = saved?.name
+        name = (savedName == nil || savedName == "My Mac" || savedName == "My iPhone") ? Self.systemDeviceName : savedName!
         rooms = saved?.rooms ?? []
         friends = saved?.friends ?? []
         deviceRoom = saved?.deviceRoom
@@ -114,7 +125,8 @@ public final class HubStore: ObservableObject {
         guard defaults.string(forKey: marker) != identity.id else { return }
         // This prototype stores only locally-created rooms. Remote pairing does
         // not import rooms, so this migration cannot claim someone else's room.
-        for index in rooms.indices {
+        let previousIdentity = defaults.string(forKey: marker)
+        for index in rooms.indices where previousIdentity == nil || rooms[index].owner == previousIdentity {
             let previousOwner = rooms[index].owner
             rooms[index].owner = identity.id
             if rooms[index].members.remove(previousOwner) != nil {
@@ -133,11 +145,11 @@ public final class HubStore: ObservableObject {
 
     public func save() {
         name = String(name.trimmingCharacters(in: .whitespacesAndNewlines).prefix(60))
-        if name.isEmpty { name = Self.kind == "mac" ? "My Mac" : "My iPhone" }
+        if name.isEmpty { name = Self.systemDeviceName }
         persist()
         renewInvite()
     }
-    private func persist() {
+    func persist() {
         let saved = SavedHub(name: name, rooms: rooms, friends: friends, deviceRoom: deviceRoom, deviceLevels: deviceLevels, audioRooms: audioRooms, audioPolicies: audioPolicies, peerRooms: peerRooms, deviceRooms: deviceRooms, audioMemberships: audioMemberships, peerMemberships: peerMemberships)
         if let data = try? JSONEncoder().encode(saved) { defaults.set(data, forKey: persistenceKey) }
     }
@@ -354,6 +366,7 @@ public final class HubStore: ObservableObject {
         }
     }
     func receive(_ envelope: SignedEnvelope, respond: @escaping (SignedEnvelope) -> Void) {
+        if receiveDeviceMove(envelope, respond: respond) { return }
         if answerInventory(envelope, respond: respond) { return }
         if let identity, mesh.receive(envelope, nearby: nearby, friends: friends, identity: identity, card: card, respond: respond) { return }
         guard let message = try? envelope.verified(as: JoinMessage.self), message.version == 1,
@@ -376,6 +389,11 @@ public final class HubStore: ObservableObject {
         guard let envelope = try? identity.sign(reply) else { return }
         respond(envelope)
         if approve { recordFriend(request.peer) }
+    }
+    func updatePeerCard(_ card: PeerCard) {
+        guard let index = friends.firstIndex(where: { $0.id == card.id }), friends[index].card.name != card.name else { return }
+        friends[index].card = card
+        persist()
     }
     private func recordFriend(_ card: PeerCard) {
         friends.removeAll { $0.id == card.id }

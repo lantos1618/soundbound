@@ -12,6 +12,8 @@ struct InventoryReply: Codable {
     var requestID: String
     var recipient: String
     var devices: [LocalAudioDevice]
+    var peer: PeerCard?
+    var rooms: [RoomLayout]?
     var created = Date()
 }
 
@@ -26,7 +28,7 @@ extension HubStore {
               abs(request.created.timeIntervalSinceNow) < 30,
               friends.contains(where: { $0.card.publicKey == envelope.signer }) else { return true }
         let reply = InventoryReply(requestID: request.id, recipient: PeerCard(publicKey: envelope.signer, name: "", kind: "").id,
-                                   devices: Array(reportedAudioDevices.prefix(32)))
+                                   devices: Array(reportedAudioDevices.prefix(32)), peer: card, rooms: ownedRoomLayouts())
         if let signed = try? identity.sign(reply) { respond(signed) }
         return true
     }
@@ -50,6 +52,10 @@ extension HubStore {
                       reply.recipient == self.deviceID, abs(reply.created.timeIntervalSinceNow) < 30,
                       reply.devices.count <= 32,
                       reply.devices.allSatisfy({ $0.id.count <= 512 && $0.name.count <= 256 }) else { return }
+                if let card = reply.peer, card.id == peer.id, card.publicKey == envelope.signer, !card.name.isEmpty, card.name.count <= 60 {
+                    self.updatePeerCard(card)
+                }
+                if let rooms = reply.rooms { _ = self.mergeRoomLayouts(rooms, from: peer.id) }
                 self.peerAudioDevices[peer.id] = reply.devices
             }
         }

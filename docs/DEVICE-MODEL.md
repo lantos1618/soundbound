@@ -19,8 +19,10 @@ Room membership is organization, not proof of physical location. Local audio enu
 
 Inputs and outputs are nested under the host that reports them. Nearby paired hosts exchange signed inventory snapshots every five seconds; this metadata is visible on the local network. A remote row reports the other host’s state and does not grant remote control of that output.
 
-Dragging a host into a room includes its attached components. Components can also have independent room memberships. Removing the parent from one room does not erase those independent assignments. Rooms remain local organization; they are not synchronized between hosts yet.
+Dragging a host into a room includes its attached components. Components can also have independent room memberships. Removing the parent from one room does not erase those independent assignments. Room definitions and layout assignments are mirrored from their creating device to nearby paired devices. The creator remains the editor; this does not grant remote audio access.
 
 Local route changes can request confirmation before Soundbound performs them. Changes initiated by Apple are observed afterward. A disconnect alone cannot prove which other host took ownership, so Soundbound must not describe it as an intercepted transfer request.
 
-One source can stream encrypted audio to one paired receiver after approval. Multi-source mixing, remote route selection, and synchronized room playback remain future work.
+One source can stream encrypted audio to one paired receiver after approval. Multi-source mixing, automatic iPhone route selection, and synchronized room playback remain future work.
+
+Bluetooth headphones can be dropped on a host to request a move. The receiving host must approve. A Mac attempts its existing verified Bluetooth connection flow; iPhone presents Apple’s audio chooser. Built-in, wired, virtual, and Continuity endpoints cannot be reassigned between hosts.

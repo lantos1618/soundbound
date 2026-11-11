@@ -3,6 +3,9 @@ import CoreImage
 import CoreImage.CIFilterBuiltins
 import AuthenticationServices
 import UniformTypeIdentifiers
+#if os(iOS)
+import MediaPlayer
+#endif
 
 public struct SoundboundRootView: View {
     @ObservedObject var store: HubStore
@@ -11,6 +14,7 @@ public struct SoundboundRootView: View {
     let onAudioAction: (LocalAudioAction, String) -> Void
     let onAudioVolume: (String, Double) -> Void
     @State private var settings = false
+    @State private var choosingOutput = false
     public init(store: HubStore, localAudioDevices: [LocalAudioDevice] = [], audioMessage: String? = nil,
                 onAudioAction: @escaping (LocalAudioAction, String) -> Void = { _, _ in },
                 onAudioVolume: @escaping (String, Double) -> Void = { _, _ in }) {
@@ -56,7 +60,39 @@ public struct SoundboundRootView: View {
             .frame(width: 580, height: 640)
             #endif
         }
-        .onAppear { store.observeAudioDevices(localAudioDevices) }
+        .onAppear {
+            store.observeAudioDevices(localAudioDevices)
+            store.onApprovedDeviceMove = { name in
+                #if os(iOS)
+                choosingOutput = true
+                #else
+                if let device = store.reportedAudioDevices.first(where: { $0.canMoveBetweenHosts && $0.name == name }) {
+                    onAudioAction(.connect, device.id)
+                } else {
+                    store.notice = "Pair \(name) with this Mac in Bluetooth settings first."
+                }
+                #endif
+            }
+        }
+        .sheet(isPresented: $choosingOutput) {
+            VStack(spacing: 20) {
+                Text("Choose your headphones").font(.headline)
+                Text("Use Apple’s audio picker below to connect them to this iPhone.")
+                    .multilineTextAlignment(.center)
+                #if os(iOS)
+                PhoneOutputPicker().frame(height: 44)
+                #endif
+                Button("Done") { choosingOutput = false }
+            }.padding(28)
+        }
+        .alert("Move headphones?", isPresented: Binding(get: { store.deviceMoveRequest != nil }, set: { _ in })) {
+            Button("Allow") { store.decideDeviceMove(approve: true) }
+            Button("Decline", role: .cancel) { store.decideDeviceMove(approve: false) }
+        } message: {
+            if let request = store.deviceMoveRequest {
+                Text("\(request.senderName) is asking to use \(request.deviceName) on \(store.name).")
+            }
+        }
         .onReceive(Timer.publish(every: 1, on: .main, in: .common).autoconnect()) { date in
             store.observeAudioDevices(localAudioDevices, now: date)
         }
@@ -73,6 +109,39 @@ public struct SoundboundRootView: View {
         .alert("Soundbound", isPresented: Binding(get: { store.notice != nil }, set: { if !$0 { store.notice = nil } })) {
             Button("OK") { store.notice = nil }
         } message: { Text(store.notice ?? "") }
+    }
+}
+
+#if os(iOS)
+private struct PhoneOutputPicker: UIViewRepresentable {
+    func makeUIView(context: Context) -> MPVolumeView {
+        let picker = MPVolumeView(frame: .zero)
+        picker.showsVolumeSlider = false
+        picker.showsRouteButton = true
+        return picker
+    }
+    func updateUIView(_ uiView: MPVolumeView, context: Context) {}
+}
+#endif
+
+private struct MeshActivity: View {
+    @ObservedObject var mesh: AudioMesh
+    var body: some View {
+        if let incoming = mesh.incoming {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("\(incoming.name) wants to play audio here.").font(.headline)
+                HStack {
+                    Button("Allow audio") { mesh.decide(allow: true) }.buttonStyle(.borderedProminent)
+                    Button("Decline") { mesh.decide(allow: false) }.buttonStyle(.bordered)
+                }
+            }
+        } else if mesh.active {
+            HStack {
+                Label(mesh.status, systemImage: "waveform").font(.subheadline)
+                Spacer()
+                Button("Stop", role: .destructive) { mesh.stop() }
+            }
+        }
     }
 }
 
@@ -175,7 +244,7 @@ private struct LocalAudioRow: View {
                 Image(systemName: device.icon).font(.system(size: 21, weight: .regular)).foregroundStyle(.secondary).frame(width: 36, height: 36)
                 VStack(alignment: .leading, spacing: 3) {
                     Text(device.name).font(.system(size: 14, weight: .medium))
-                    Text(device.detail).font(.caption).foregroundStyle(.secondary)
+                    Text(device.connectionLabel + " · " + device.detail).font(.caption).foregroundStyle(.secondary)
                 }
                 Spacer(minLength: 8)
                 if device.busy { ProgressView().controlSize(.small) }
@@ -245,10 +314,10 @@ private struct AudioDeviceSettingsView: View {
                     Text(device.status).font(.subheadline).foregroundStyle(.secondary)
                     VStack(alignment: .leading, spacing: 12) {
                         Text("Use this device").font(.headline)
-                        if device.hasOutput { Button(device.selectedOutput ? "Selected for Mac sound" : "Use for Mac sound") { request(.useOutput) }.disabled(device.selectedOutput || device.busy) }
-                        if device.hasInput { Button(device.selectedInput ? "Selected as Mac microphone" : "Use as Mac microphone") { request(.useInput) }.disabled(device.selectedInput || device.busy) }
-                        if device.canConnect { Button("Connect to this Mac") { request(.connect) }.disabled(device.busy) }
-                        if device.canDisconnect { Button("Disconnect from this Mac") { request(.disconnect) }.disabled(device.busy) }
+                        if device.hasOutput { Button(device.selectedOutput ? "Selected for this device" : "Use for this device") { request(.useOutput) }.disabled(device.selectedOutput || device.busy) }
+                        if device.hasInput { Button(device.selectedInput ? "Selected microphone" : "Use as microphone") { request(.useInput) }.disabled(device.selectedInput || device.busy) }
+                        if device.canConnect { Button("Connect here") { request(.connect) }.disabled(device.busy) }
+                        if device.canDisconnect { Button("Disconnect here") { request(.disconnect) }.disabled(device.busy) }
                         if device.canTest { Button("Test sound") { action(.testSound, device.id); dismiss() }.disabled(device.busy) }
                     }.buttonStyle(.bordered)
                     Divider()
@@ -269,7 +338,7 @@ private struct AudioDeviceSettingsView: View {
                                 set: { joined in
                                     if joined { store.moveAudioDevice(device.id, to: room.id) }
                                     else { store.removeAudioDevice(device.id, from: room.id) }
-                                }))
+                                })).disabled(room.owner != store.deviceID)
                         }
                         Text("A device can belong to more than one room.").font(.caption).foregroundStyle(.secondary)
                     }
@@ -374,6 +443,7 @@ private struct HomeView: View {
                     }
                     VStack(spacing: 0) {
                         HomeDeviceRow(name: store.name, owner: "You", kind: HubStore.kind, nearby: true, isLocal: true, dragID: store.deviceID, settingsAction: { showingDeviceSettings = true })
+                            .onDrop(of: [UTType.plainText], isTargeted: nil) { acceptHostDrop($0, hostID: store.deviceID) }
                             .contextMenu {
                                 ForEach(store.rooms) { room in
                                     Button("Add to \(room.name)") { store.moveDevice(to: room.id) }
@@ -423,14 +493,15 @@ private struct HomeView: View {
                         VStack(alignment: .leading, spacing: 14) {
                             HStack(alignment: .firstTextBaseline) {
                                 Text(room.name).font(.headline)
-                                Text(room.region).font(.caption).foregroundStyle(.secondary)
+                                Text(room.owner == store.deviceID ? room.region : "Synced · " + (store.friends.first(where: { $0.id == room.owner })?.card.name ?? "Paired device"))
+                                    .font(.caption).foregroundStyle(.secondary)
                                 Spacer()
                                 Menu {
                                     Button("Test sound…") { testingRoom = room }
-                                    Button("Room settings") { roomSettings = room }
-                                    if !store.deviceRooms.contains(room.id) {
+                                    Button("Room settings") { roomSettings = room }.disabled(room.owner != store.deviceID)
+                                    if room.owner == store.deviceID && !store.deviceRooms.contains(room.id) {
                                         Button("Add this device here") { store.moveDevice(to: room.id) }
-                                    } else {
+                                    } else if room.owner == store.deviceID {
                                         Button("Remove this device from room") { store.removeDevice(from: room.id) }
                                     }
                                 } label: { Image(systemName: "ellipsis").frame(width: 24, height: 24) }
@@ -478,10 +549,8 @@ private struct HomeView: View {
                             )) { acceptDrop($0, roomID: room.id) }
                     }
                 }
-                AudioMeshPanel(store: store, mesh: store.mesh)
+                MeshActivity(mesh: store.mesh)
                 FriendsSection(store: store, adding: $showingDeviceSettings)
-                Text("Rooms organize devices. Live audio currently shares one microphone with one paired device over the local network.")
-                    .font(.caption).foregroundStyle(.secondary)
             }
             .padding(28).frame(maxWidth: 850, alignment: .leading)
             .frame(maxWidth: .infinity, alignment: .center)
@@ -549,6 +618,29 @@ private struct HomeView: View {
         }
         return true
     }
+    private func acceptHostDrop(_ providers: [NSItemProvider], hostID: String) -> Bool {
+        guard let provider = providers.first(where: { $0.canLoadObject(ofClass: NSString.self) }) else { return false }
+        provider.loadObject(ofClass: NSString.self) { object, _ in
+            guard let value = object as? String else { return }
+            DispatchQueue.main.async {
+                let local = value.hasPrefix("audio:") ? localAudioDevices.first { $0.id == String(value.dropFirst(6)) } : nil
+                let remote = store.friends.flatMap { peer in
+                    (store.peerAudioDevices[peer.id] ?? []).filter {
+                        HubStore.remoteComponentID(peer: peer.id, component: $0.id) == value
+                    }
+                }.first
+                if let device = local ?? remote {
+                    let sourceName = local != nil ? store.name : store.friends.first(where: { peer in
+                        (store.peerAudioDevices[peer.id] ?? []).contains { HubStore.remoteComponentID(peer: peer.id, component: $0.id) == value }
+                    })?.card.name
+                    store.requestDeviceMove(device, to: hostID, from: sourceName)
+                }
+                else { store.notice = "Drop wireless headphones here to request a connection. Devices themselves belong in rooms." }
+            }
+        }
+        return true
+    }
+
     private func remoteComponentRow(_ component: LocalAudioDevice, peer: KnownPeer) -> some View {
         let id = HubStore.remoteComponentID(peer: peer.id, component: component.id)
         return HStack(spacing: 8) {
@@ -557,7 +649,7 @@ private struct HomeView: View {
                 .frame(width: 36, height: 36)
             VStack(alignment: .leading, spacing: 3) {
                 Text(component.name).font(.system(size: 14, weight: .medium))
-                Text(peer.card.name + " · " + (component.hasInput && component.hasOutput ? "Input & output" : component.hasInput ? "Microphone" : "Audio output"))
+                Text(component.connectionLabel + " · " + peer.card.name + " · " + (component.hasInput && component.hasOutput ? "Input & output" : component.hasInput ? "Microphone" : "Audio output"))
                     .font(.caption).foregroundStyle(.secondary)
             }
             Spacer()
@@ -578,6 +670,7 @@ private struct HomeView: View {
     private func peerRow(_ peer: KnownPeer) -> some View {
         HomeDeviceRow(name: peer.card.name, owner: "Paired device", kind: peer.card.kind,
             nearby: store.nearby.contains { $0.id == peer.id }, dragID: "peer:" + peer.id)
+            .onDrop(of: [UTType.plainText], isTargeted: nil) { acceptHostDrop($0, hostID: peer.id) }
             .contextMenu {
                 ForEach(store.rooms) { room in
                     Button("Add to \(room.name)") { store.movePeer(peer.id, to: room.id) }
@@ -646,6 +739,7 @@ private struct RoomAudioTestView: View {
                     Text("Other devices must approve playback. Tests are sent to one device at a time.")
                         .font(.caption).foregroundStyle(.secondary)
                     Divider()
+                    AudioMeshPanel(store: store, mesh: mesh)
                     Text("Check this microphone").font(.headline)
                     Text("Record three seconds, then play it back on this device. Nothing is saved to disk or sent to the room.")
                         .font(.subheadline).foregroundStyle(.secondary)
@@ -864,7 +958,12 @@ private struct QRCode: View {
     let value: String
     var image: CGImage? {
         let filter = CIFilter.qrCodeGenerator(); filter.message = Data(value.utf8); filter.correctionLevel = "M"
-        guard let output = filter.outputImage else { return nil }
+        guard let mono = filter.outputImage else { return nil }
+        let colors = CIFilter.falseColor()
+        colors.inputImage = mono
+        colors.color0 = CIColor(red: 0, green: 0.32, blue: 0.92)
+        colors.color1 = CIColor(red: 1, green: 1, blue: 1)
+        guard let output = colors.outputImage else { return nil }
         return CIContext().createCGImage(output.transformed(by: CGAffineTransform(scaleX: 5, y: 5)), from: output.extent.applying(CGAffineTransform(scaleX: 5, y: 5)))
     }
     var body: some View {
@@ -881,40 +980,73 @@ public struct AddFriendView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var entered = ""
     @State private var scanning = false
+    @State private var cameraError: String?
     public init(store: HubStore) { self.store = store }
+    private var pairingCard: some View {
+        ZStack {
+            LinearGradient(colors: [Color(red: 0.12, green: 0.20, blue: 0.27), Color(red: 0.28, green: 0.39, blue: 0.43)], startPoint: .topLeading, endPoint: .bottomTrailing)
+            #if os(iOS)
+            if scanning {
+                CameraScanner(completion: { value in
+                    scanning = false
+                    if let value { entered = value; store.join(codeOrLink: value) }
+                }, error: { cameraError = $0 })
+            }
+            #endif
+            VStack(spacing: 20) {
+                VStack(spacing: 5) {
+                    Text(scanning ? "Scan their code" : "Show them your code").font(.title2.weight(.semibold))
+                    Text(scanning ? "Point your camera at a Soundbound code." : "They scan. You approve.").font(.subheadline)
+                }.foregroundStyle(.white).multilineTextAlignment(.center)
+                #if os(iOS)
+                Button(scanning ? "Show my code" : "Scan a code") { scanning.toggle(); cameraError = nil }
+                    .buttonStyle(.bordered).tint(.white)
+                #endif
+                Spacer(minLength: 0)
+                if scanning {
+                    RoundedRectangle(cornerRadius: 24)
+                        .stroke(.white, style: StrokeStyle(lineWidth: 2, dash: [10, 8]))
+                        .frame(height: 250).padding(.horizontal, 10)
+                    if let cameraError { Text(cameraError).font(.caption).foregroundStyle(.white) }
+                } else {
+                    VStack(spacing: 10) {
+                        QRCode(value: store.inviteLink).frame(width: 230, height: 230)
+                        Text(store.friendCode).font(.system(size: 23, weight: .semibold, design: .monospaced)).tracking(3)
+                            .foregroundStyle(.black).textSelection(.enabled)
+                    }
+                    .padding(12).background(.white, in: RoundedRectangle(cornerRadius: 24))
+                    .overlay(RoundedRectangle(cornerRadius: 30).stroke(.white.opacity(0.8), style: StrokeStyle(lineWidth: 2, dash: [9, 7])).padding(-8))
+                }
+                Spacer(minLength: 0)
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack {
+                        Text("Device code").font(.headline)
+                        Spacer()
+                        ShareLink(item: store.inviteLink) { Label("Share", systemImage: "square.and.arrow.up") }
+                    }
+                    HStack {
+                        TextField("Enter their code", text: $entered)
+                            .textFieldStyle(.plain).onSubmit { store.join(codeOrLink: entered) }
+                        Button { store.join(codeOrLink: entered) } label: {
+                            Image(systemName: "arrow.right.circle.fill").font(.title2)
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(entered.trimmingCharacters(in: .whitespaces).isEmpty)
+                        .accessibilityLabel("Send pairing request")
+                    }.padding(12).background(Color.black.opacity(0.04), in: RoundedRectangle(cornerRadius: 12))
+                }
+                .padding(18).background(.white, in: RoundedRectangle(cornerRadius: 22))
+                .foregroundStyle(.black)
+            }.padding(22)
+        }
+        .frame(height: 600).clipShape(RoundedRectangle(cornerRadius: 28))
+        .onDisappear { scanning = false }
+    }
     public var body: some View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 22) {
-                    VStack(spacing: 6) {
-                        Text("Show them your code").font(.title2.weight(.medium))
-                        Text("Or scan theirs. Pairing never shares audio by itself.")
-                            .font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.center)
-                    }
-                    QRCode(value: store.inviteLink).frame(maxWidth: 245, maxHeight: 245)
-                    VStack(spacing: 5) {
-                        Text(store.friendCode).font(.system(size: 28, weight: .medium, design: .monospaced)).tracking(4).textSelection(.enabled)
-                        Text("Fingerprint \(store.fingerprint) · code lasts 10 minutes")
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
-                    HStack(spacing: 16) {
-                        ShareLink(item: store.inviteLink) { Label("Share code", systemImage: "square.and.arrow.up") }
-                        Button("Refresh") { store.renewInvite() }
-                    }.buttonStyle(.bordered)
-                    #if os(iOS)
-                    Button { scanning = true } label: { Label("Scan a device’s code", systemImage: "qrcode.viewfinder").frame(maxWidth: .infinity) }
-                        .buttonStyle(.borderedProminent)
-                    #endif
-                    VStack(alignment: .leading, spacing: 10) {
-                        Text("Device code").font(.headline)
-                        HStack {
-                            TextField("Enter a code or paste an invite", text: $entered).textFieldStyle(.roundedBorder)
-                                .onSubmit { store.join(codeOrLink: entered) }
-                            Button { store.join(codeOrLink: entered) } label: { Image(systemName: "arrow.right.circle.fill").font(.title2) }
-                                .disabled(entered.trimmingCharacters(in: .whitespaces).isEmpty)
-                                .accessibilityLabel("Send pairing request")
-                        }
-                    }
+                    pairingCard
                     Divider()
                     VStack(alignment: .leading, spacing: 12) {
                         Toggle("Discover nearby", isOn: Binding(get: { store.discovering }, set: { store.setDiscovery($0) }))
@@ -945,14 +1077,7 @@ public struct AddFriendView: View {
                     .frame(maxWidth: .infinity)
             }.navigationTitle("Add a device")
                 .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
-                #if os(iOS)
-                .sheet(isPresented: $scanning) {
-                    ScannerScreen { result in
-                        scanning = false
-                        if let result { entered = result; store.join(codeOrLink: result) }
-                    }
-                }
-                #endif
+
         }
         #if os(macOS)
         .frame(width: 460, height: 720)
@@ -965,22 +1090,29 @@ private struct SettingsView: View {
     var body: some View {
         DetailPage(title: "Settings", subtitle: "Stay in control of what you share.") {
             DetailSection(title: "Account") {
-                SignInWithAppleButton(.signIn, onRequest: { _ in }, onCompletion: { _ in })
-                    .frame(width: 220, height: 40).disabled(true)
+                HStack {
+                    Spacer()
+                    SignInWithAppleButton(.signIn, onRequest: { _ in }, onCompletion: { _ in })
+                        .frame(width: 220, height: 40).disabled(true)
+                    Spacer()
+                }
                 Text("Apple sign-in is coming later. You can pair devices locally without an account.")
                     .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
             DetailSection(title: "Your device") {
                 VStack(alignment: .leading, spacing: 7) {
                     Text("Name").font(.subheadline).foregroundStyle(.secondary)
-                    TextField("Device name", text: $store.name).textFieldStyle(.roundedBorder).onSubmit { store.save() }
+                    TextField("Device name", text: $store.name).textFieldStyle(.roundedBorder)
+                        .task(id: store.name) {
+                            try? await Task.sleep(nanoseconds: 600_000_000)
+                            if !Task.isCancelled { store.save() }
+                        }
                 }
                 HStack {
                     Text("Fingerprint").foregroundStyle(.secondary)
                     Spacer()
                     Text(store.fingerprint).font(.system(.body, design: .monospaced))
                 }
-                Button("Save name") { store.save() }.buttonStyle(.bordered)
             }
             DetailSection(title: "Nearby discovery") {
                 Toggle("Let nearby devices find me", isOn: Binding(get: { store.discovering }, set: { store.setDiscovery($0) }))

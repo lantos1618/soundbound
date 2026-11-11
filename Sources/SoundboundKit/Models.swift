@@ -84,6 +84,9 @@ public struct LocalAudioDevice: Identifiable, Equatable, Codable {
     public var awaitingTestAnswer = false
     public var volume: Double?
     public var busy = false
+    public var connection: AudioConnection?
+    public var canMoveBetweenHosts: Bool { connection == .bluetooth }
+    public var connectionLabel: String { connection?.rawValue ?? "Audio device" }
     public init(id: String, name: String, icon: String, detail: String, status: String) {
         self.id = id; self.name = name; self.icon = icon; self.detail = detail; self.status = status
     }
@@ -94,4 +97,12 @@ public struct AudioDevicePolicy: Codable, Equatable {
     public var notifyChanges = true
     public var removeWhenDisconnected = false
     public init() {}
+}
+
+public enum AudioConnection: String, Codable {
+    case builtIn = "Built-in"
+    case bluetooth = "Bluetooth"
+    case continuity = "Apple Continuity"
+    case wired = "Wired"
+    case virtual = "Virtual"
 }

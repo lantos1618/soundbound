@@ -155,7 +155,10 @@ export class AppleAuthBroker {
   constructor(state, env) { this.state = state; this.env = env; }
   async fetch(request) {
     const response = await handleAppleAuth(request, this.env, this.state.storage);
-    await this.state.storage.setAlarm(Date.now() + 600_000);
+    // Continuous requests must not postpone expiry cleanup indefinitely.
+    if (await this.state.storage.getAlarm() === null) {
+      await this.state.storage.setAlarm(Date.now() + 600_000);
+    }
     return response;
   }
   async alarm() {
@@ -168,6 +171,12 @@ export class AppleAuthBroker {
 }
 export default {
   fetch(request, env) {
+    const url = new URL(request.url);
+    const allowed = (request.method === 'GET' && ['/apple/start', '/apple/health'].includes(url.pathname)) ||
+      (request.method === 'POST' && ['/apple/callback', '/apple/redeem'].includes(url.pathname));
+    if (!allowed || url.href.length > 2048) return json(404, {error: 'Not found'});
+    if (Number(request.headers.get('Content-Length')) > MAX_BODY) return json(413, {error: 'Request too large'});
+    if (url.pathname === '/apple/health') return json(200, {service: 'soundbound-apple-auth', configured: configured(env)});
     if (!env.APPLE_AUTH) return json(503, {error: 'Apple web sign-in is not configured'});
     return env.APPLE_AUTH.get(env.APPLE_AUTH.idFromName('broker')).fetch(request);
   },

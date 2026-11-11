@@ -83,6 +83,7 @@ final class SoundModel: NSObject, ObservableObject {
         didSet { UserDefaults.standard.set(quietPrompts, forKey: "quietPrompts") }
     }
     var onTestStarted: ((String) -> Void)?
+    var onTestFrame: ((String, Data) -> Void)?
     var onDeparture: ((String) -> Void)?
     private var listeners: [(AudioObjectPropertyAddress, AudioObjectPropertyListenerBlock)] = []
     private var previouslyOnMac: Bool?
@@ -344,6 +345,7 @@ final class SoundModel: NSObject, ObservableObject {
     }
 
     func perform(_ action: LocalAudioAction, id: String) {
+        if case .stopTest = action { resetSoundCheck(); operationID = nil; return }
         guard !busy else { return }
         let output = outputs.first { rowID(for: $0) == id }
         let input = inputs.first { rowID(for: $0) == id }
@@ -392,6 +394,7 @@ final class SoundModel: NSObject, ObservableObject {
         case .testOutput:
             guard let output else { message = RoutingError.unavailable.localizedDescription; return }
             playOutputTest(output)
+        case .stopTest: break
         case .heardSound: confirmSound(heard: true)
         case .didNotHearSound: confirmSound(heard: false)
         }
@@ -412,7 +415,17 @@ final class SoundModel: NSObject, ObservableObject {
                 buffer.floatChannelData![0][i] = sample; buffer.floatChannelData![1][i] = sample
             }
             engine.attach(player); engine.connect(player, to: engine.mainMixerNode, format: format)
-            verificationEngine = engine; verificationPlayer = player; operationID = rowID(for: output)
+            let targetID = rowID(for: output)
+            engine.mainMixerNode.installTap(onBus: 0, bufferSize: 960, format: format) { [weak self] buffer, _ in
+                guard let samples = buffer.floatChannelData?[0] else { return }
+                var bytes = Data(capacity: Int(buffer.frameLength) * 2)
+                for index in 0..<Int(buffer.frameLength) {
+                    var value = Int16(max(-32767, min(32767, samples[index] * 32767))).littleEndian
+                    withUnsafeBytes(of: &value) { bytes.append(contentsOf: $0) }
+                }
+                DispatchQueue.main.async { self?.onTestFrame?(targetID, bytes) }
+            }
+            verificationEngine = engine; verificationPlayer = player; operationID = targetID
             try engine.start(); player.scheduleBuffer(buffer); player.play()
             onTestStarted?(rowID(for: output))
             message = "Playing a quiet test on \(output.name)."

@@ -15,7 +15,11 @@ Set `SoundboundAppleWebAuthURL` in each app’s Info.plist to the broker’s HTT
 
 ## Broker configuration
 
-`server/apple-auth.mjs` is a separate Worker/Durable Object module. It does not enable or issue TURN credentials.
+`server/apple-auth.mjs` is a separate Worker/Durable Object module. It does not enable or issue TURN credentials. Its dedicated configuration is `server/wrangler.apple-auth.jsonc`, using a SQLite-backed Durable Object supported by the Workers Free plan.
+
+Keep the account on **Workers Free**. Do not upgrade to Workers Paid for this prototype. Free-plan daily request and storage operation limits cause requests to fail when exhausted; the app's 1,000-flow limit is additional abuse resistance, not a substitute for that account-level free-plan restriction.
+
+Deployment requires the already-registered Services ID and exact callback to match the config. Store `APPLE_PRIVATE_KEY` and `APPLE_KEY_ID` as Worker secrets, deploy with the dedicated configuration, then verify `/apple/health` reports `configured: true` before enabling the client URL. Never copy either secret into a plist or source file.
 
 Required bindings and secrets:
 
@@ -40,3 +44,7 @@ The broker caps new flows at 1,000/day for this prototype and expires state. Tha
 ## Tests
 
 `server/apple-auth.test.mjs` covers signature and claim validation, ES256 client-secret generation, disabled configuration, state/PKCE binding, atomic one-use redemption, callback replay, and rejection before an unrecognized state can contact Apple.
+
+## Public endpoint bounds
+
+Only four exact routes are accepted. Unknown paths and oversized declared bodies are rejected before reaching the Durable Object. Read bodies are capped at 16 KiB even without a Content-Length header. The server creates at most 1,000 authorization flows per UTC day, expires flow state after ten minutes and redemption codes after one minute, and removes expired records using an alarm that incoming traffic cannot keep postponing. Replays and invalid state cannot trigger an Apple token exchange. These controls can make abusive traffic fail; on a paid hosting plan they do not impose a dollar ceiling.

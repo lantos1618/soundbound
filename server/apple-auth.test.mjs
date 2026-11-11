@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {webcrypto} from 'node:crypto';
-import {handleAppleAuth, verifyAppleIdentityToken, createAppleClientSecret} from './apple-auth.mjs';
+import worker, {AppleAuthBroker, handleAppleAuth, verifyAppleIdentityToken, createAppleClientSecret} from './apple-auth.mjs';
 globalThis.crypto ??= webcrypto;
 const now = 1_800_000_000_000;
 const b64 = value => Buffer.from(value).toString('base64url');
@@ -87,4 +87,31 @@ test('unknown state cannot reach token exchange', async () => {
   const request=new Request(env.APPLE_AUTH_CALLBACK_URL,{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams({state:'x'.repeat(43),code:'stolen-code'})});
   assert.equal((await handleAppleAuth(request,env,new MemoryStorage(),{now,fetch:()=>{fetched=true;}})).status,400);
   assert.equal(fetched,false);
+});
+
+test('unknown routes never invoke the Durable Object', async () => {
+  let invoked=false;
+  const binding={idFromName(){invoked=true;},get(){throw new Error('must not run');}};
+  const result=await worker.fetch(new Request('https://auth.example.com/unexpected'),{APPLE_AUTH:binding});
+  assert.equal(result.status,404);
+  assert.equal(invoked,false);
+});
+test('the global flow allowance stops new authorization redirects', async () => {
+  const store=new MemoryStorage();
+  await store.put(`limit:${Math.floor(now/86400000)}`,{count:1000,expires:now+86400000});
+  const request=new Request(`https://auth.example.com/apple/start?state=${'s'.repeat(32)}&nonce=${'n'.repeat(32)}&code_challenge=${'c'.repeat(43)}`);
+  const result=await handleAppleAuth(request,env,store,{now});
+  assert.equal(result.status,429);
+});
+test('incoming requests do not postpone an existing cleanup alarm', async () => {
+  const store=new MemoryStorage();
+  let alarm=null,scheduled=0;
+  store.getAlarm=async()=>alarm;
+  store.setAlarm=async value=>{alarm=value;scheduled++;};
+  const broker=new AppleAuthBroker({storage:store},{});
+  await broker.fetch(new Request('https://auth.example.com/apple/health'));
+  const first=alarm;
+  await broker.fetch(new Request('https://auth.example.com/apple/health'));
+  assert.equal(scheduled,1);
+  assert.equal(alarm,first);
 });

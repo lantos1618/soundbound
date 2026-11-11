@@ -97,7 +97,13 @@ public struct SoundboundRootView: View {
                 Text("\(request.senderName) is asking to use \(request.deviceName) on \(store.name).")
             }
         }
-        .onChange(of: scenePhase) { phase in if phase != .active { store.activity.stopRecording() } }
+        .alert("Allow microphone recording?", isPresented: Binding(get: { store.recordingRequest != nil }, set: { _ in })) {
+            Button("Allow recording") { store.decideRecordingRequest(allow: true) }
+            Button("Decline", role: .cancel) { store.decideRecordingRequest(allow: false) }
+        } message: {
+            Text("\(store.recordingRequest?.senderName ?? "A paired device") wants to record this microphone. Audio is encrypted and either device can stop.")
+        }
+        .onChange(of: scenePhase) { phase in if phase == .background { store.activity.stopRecording() } }
         .onReceive(Timer.publish(every: 1, on: .main, in: .common).autoconnect()) { date in
             store.observeAudioDevices(localAudioDevices, now: date)
         }
@@ -197,53 +203,47 @@ private struct AudioDeviceGlyph: View {
     var input: LocalAudioDevice? = nil
     var enabled = true
     let play: () -> Void
-    @GestureState private var contactActive = false
-    @State private var pressed = false
-    @State private var heldToRecord = false
-    @State private var pressToken = UUID()
     private var mode: DeviceAudioActivity.Mode { activity.modes[id] ?? .idle }
     private var color: Color { mode == .recording ? .red : mode == .chirping ? .green : mode == .waiting ? .orange : .secondary }
     var body: some View {
-        ZStack {
-            Circle().fill(color.opacity(mode == .idle ? 0 : 0.12)).frame(width: 36, height: 36)
-            Image(systemName: symbol).font(.system(size: 21)).foregroundStyle(color)
-                .scaleEffect(1 + (activity.levels[id] ?? 0) * 0.3)
-        }.frame(width: 40, height: 40).contentShape(Circle())
-            .animation(.easeOut(duration: 0.08), value: activity.levels[id] ?? 0)
-            .opacity(enabled ? 1 : 0.4)
-            .gesture(DragGesture(minimumDistance: 0).updating($contactActive) { _, active, _ in active = true }.onChanged { value in
-                guard enabled else { return }
-                if !pressed {
-                    pressed = true; heldToRecord = false
-                    let token = UUID(); pressToken = token
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.22) {
-                        guard pressed, pressToken == token, let input else { return }
-                        heldToRecord = true; activity.beginRecording(input)
-                    }
-                }
-                if abs(value.translation.width) + abs(value.translation.height) > 35 {
-                    pressed = false; pressToken = UUID(); activity.endRecording(id)
-                }
-            }.onEnded { _ in
-                let shouldPlay = pressed && !heldToRecord && enabled
-                pressed = false; pressToken = UUID()
-                activity.endRecording(id)
-                if shouldPlay { play() }
-            })
-            .onChange(of: contactActive) { active in
-                if !active {
-                    DispatchQueue.main.async {
-                        if !contactActive { activity.endRecording(id); pressed = false; pressToken = UUID() }
-                    }
+        Button {
+            if let input {
+                if mode == .recording || mode == .waiting { activity.endRecording(id) }
+                else { activity.beginRecording(input) }
+            } else { play() }
+        } label: {
+            ZStack {
+                Circle().fill(color.opacity(mode == .idle ? 0 : 0.12))
+                Image(systemName: symbol).font(.system(size: 21)).foregroundStyle(color)
+            }.frame(width: 40, height: 40).contentShape(Circle())
+        }
+        .buttonStyle(.plain).disabled(!enabled && mode == .idle)
+        .accessibilityLabel(name + (mode == .recording ? ", recording, tap to stop" : mode == .chirping ? ", playing, tap to stop" : ""))
+        .help(input == nil ? "Play or stop a test sound" : "Start or stop recording")
+    }
+}
+
+private struct DeviceWaveform: View {
+    @ObservedObject var activity: DeviceAudioActivity
+    let id: String
+    var body: some View {
+        let mode = activity.modes[id] ?? .idle
+        Canvas { context, size in
+            let samples = activity.waveforms[id] ?? []
+            let color: Color = mode == .recording ? .red : mode == .chirping ? .green : .orange
+            if mode != .idle {
+                let count = 24
+                let width = size.width / Double(count)
+                for index in 0..<count {
+                    let sample = index < samples.count ? samples[index] : 0
+                    let height = max(2, sample * size.height)
+                    let rect = CGRect(x: Double(index) * width, y: size.height - height, width: max(1, width - 1.5), height: height)
+                    context.fill(Path(roundedRect: rect, cornerRadius: 1), with: .color(color))
                 }
             }
-            .accessibilityElement().accessibilityLabel(name + (mode == .recording ? ", recording" : mode == .chirping ? ", playing" : ""))
-            .accessibilityAddTraits(.isButton)
-            .accessibilityAction { if enabled { play() } }
-            .accessibilityAction(named: "Start recording") { if let input, enabled { activity.beginRecording(input) } }
-            .accessibilityAction(named: "Stop recording") { activity.endRecording(id) }
-            .help(input == nil ? "Tap to play a test sound" : "Hold to record; release to stop")
-            .onDisappear { activity.endRecording(id) }
+        }.frame(width: 68, height: 24)
+        .accessibilityLabel(mode == .recording ? "Recording level" : mode == .chirping ? "Playback level" : "")
+        .accessibilityHidden(mode == .idle)
     }
 }
 
@@ -332,22 +332,19 @@ private struct LocalAudioRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 8) {
-                DeviceDragHandle(id: "audio:" + device.id, name: device.name)
                 AudioDeviceGlyph(activity: store.activity, id: device.id, symbol: device.icon, name: device.name,
-                    input: device.hasInput ? device : nil, enabled: device.isAvailable && !device.busy && !store.mesh.active) {
-                    if device.hasOutput { action(.testOutput, device.id) }
+                    input: device.hasInput && !device.hasOutput ? device : nil, enabled: device.isAvailable && !device.busy && !store.mesh.active) {
+                    if device.hasOutput {
+                        if store.activity.modes[device.id] == .chirping { action(.stopTest, device.id); store.activity.clear(device.id) }
+                        else { action(.testOutput, device.id) }
+                    }
                     else { store.activity.showRecordingHint(device.id) }
                 }
                 DeviceRowText(name: device.name,
                     detail: device.connectionLabel + " · " + (device.hasInput && device.hasOutput ? "Input & output" : device.hasInput ? "Microphone" : "Speaker"),
                     activity: store.activity, id: device.id, status: device.status, canReplay: true)
-                    .modifier(DeviceDragArea(id: "audio:" + device.id, name: device.name))
-                ZStack { if device.busy { ProgressView().controlSize(.small) } }.frame(width: 14, height: 18)
-                Button { showingSettings = true } label: {
-                    Image(systemName: "gearshape").frame(width: 24, height: 24)
-                }.buttonStyle(.plain)
-                    .help("Settings for \(device.name)")
-                    .accessibilityLabel("Settings for \(device.name)")
+                DeviceWaveform(activity: store.activity, id: device.id)
+
 
             }
             if device.volume != nil {
@@ -372,6 +369,16 @@ private struct LocalAudioRow: View {
             }
         }
         .padding(.vertical, 10)
+        .modifier(DeviceDragArea(id: "audio:" + device.id, name: device.name))
+        .contextMenu {
+            Button("Device settings") { showingSettings = true }
+            if device.hasInput {
+                Button(store.activity.modes[device.id] == .recording ? "Stop recording" : "Record microphone") {
+                    if store.activity.modes[device.id] == .recording { store.activity.endRecording(device.id) }
+                    else { store.activity.beginRecording(device) }
+                }
+            }
+        }
         .sheet(isPresented: $showingSettings) {
             AudioDeviceSettingsView(device: device, store: store, action: action)
         }
@@ -479,18 +486,15 @@ private struct HomeDeviceRow: View {
     var testAction: (() -> Void)? = nil
     var body: some View {
         HStack(spacing: 8) {
-            if let dragID { DeviceDragHandle(id: dragID, name: name) }
             AudioDeviceGlyph(activity: activity, id: activityID,
                 symbol: kind == "mac" ? "laptopcomputer" : "iphone", name: name,
                 enabled: testAction != nil) { testAction?() }
             DeviceRowText(name: name, detail: owner, activity: activity, id: activityID,
                           status: isLocal ? "This device" : (nearby ? "Nearby" : "Offline"))
-                .modifier(DeviceDragArea(id: dragID, name: name))
-            if let settingsAction {
-                Button(action: settingsAction) { Image(systemName: "gearshape").frame(width: 24, height: 24) }
-                    .buttonStyle(.plain).help("Settings for \(name)").accessibilityLabel("Settings for \(name)")
-            } else { Color.clear.frame(width: 24, height: 24) }
+            DeviceWaveform(activity: activity, id: activityID)
         }.padding(.vertical, 10)
+            .modifier(DeviceDragArea(id: dragID, name: name))
+            .contextMenu { if let settingsAction { Button("Device settings", action: settingsAction) } }
     }
 }
 
@@ -655,9 +659,6 @@ private struct HomeView: View {
             .frame(maxWidth: .infinity, alignment: .center)
         }
         .background(canvasColor)
-        .safeAreaInset(edge: .bottom, spacing: 0) {
-            HomeAudioStatus(mesh: store.mesh, activity: store.activity, roomTest: roomTest, localMessage: audioMessage)
-        }
         .navigationTitle("")
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
@@ -693,7 +694,10 @@ private struct HomeView: View {
         }
     }
     private func testLocalHost() {
-        if let output = localAudioDevices.first(where: { $0.hasOutput && $0.selectedOutput }) { onAudioAction(.testOutput, output.id) }
+        if let output = localAudioDevices.first(where: { $0.hasOutput && $0.selectedOutput }) {
+            if store.activity.modes[output.id] == .chirping { onAudioAction(.stopTest, output.id); store.activity.clear(output.id); store.activity.clear(store.deviceID) }
+            else { onAudioAction(.testOutput, output.id) }
+        }
     }
     private func testRoom(_ room: AudioRoom) {
         var targets: [RoomTestTarget] = localAudioDevices.filter {
@@ -768,19 +772,20 @@ private struct HomeView: View {
     private func remoteComponentRow(_ component: LocalAudioDevice, peer: KnownPeer) -> some View {
         let id = HubStore.remoteComponentID(peer: peer.id, component: component.id)
         return HStack(spacing: 8) {
-            DeviceDragHandle(id: id, name: component.name)
             AudioDeviceGlyph(activity: store.activity, id: id, symbol: component.icon, name: component.name,
-                enabled: component.hasOutput && component.isAvailable && !store.mesh.active) {
-                store.sendAudioTest(to: peer.id, outputID: component.id)
+                enabled: component.isAvailable) {
+                if component.hasInput && !component.hasOutput { store.toggleRemoteRecording(peerID: peer.id, inputID: component.id) }
+                else if store.activity.modes[id] == .chirping || store.activity.modes[id] == .waiting { store.mesh.stop(); store.activity.clear(id) }
+                else { store.sendAudioTest(to: peer.id, outputID: component.id) }
             }
             DeviceRowText(name: component.name,
                 detail: component.connectionLabel + " · " + (component.hasInput && component.hasOutput ? "Input & output" : component.hasInput ? "Microphone" : "Speaker"),
                 activity: store.activity, id: id,
-                status: component.hasInput && !component.hasOutput ? "Record on " + peer.card.name : component.selectedOutput || component.selectedInput ? "In use" : component.isAvailable ? "Available" : "Not connected")
-                .modifier(DeviceDragArea(id: id, name: component.name))
-            Color.clear.frame(width: 24, height: 24)
+                status: component.selectedOutput || component.selectedInput ? "In use" : component.isAvailable ? "Available" : "Not connected")
+            DeviceWaveform(activity: store.activity, id: id)
         }
         .padding(.vertical, 10)
+        .modifier(DeviceDragArea(id: id, name: component.name))
         .contextMenu {
             ForEach(store.rooms) { room in
                 Button("Add to \(room.name)") { store.moveAudioDevice(id, to: room.id) }

@@ -48,6 +48,10 @@ public final class HubStore: ObservableObject {
     private var activityObservation: AnyCancellable?
     @Published public internal(set) var deviceMoveRequest: DeviceMoveRequest?
     public var onApprovedDeviceMove: ((String) -> Void)?
+    @Published public internal(set) var recordingRequest: RemoteRecordingRequest?
+    var recordingReply: ((SignedEnvelope) -> Void)?
+    var seenRecordingRequests: [String: Date] = [:]
+    var pendingRemoteRecording: (request: String, peer: String, row: String)?
     var moveReply: ((SignedEnvelope) -> Void)?
     var seenMoveRequests: [String: Date] = [:]
     let network = LocalNetwork()
@@ -110,6 +114,14 @@ public final class HubStore: ObservableObject {
             guard let self, let id = outputID ?? self.reportedAudioDevices.first(where: { $0.selectedOutput })?.id else { return }
             self.activity.chirp(id)
             self.activity.chirp(self.deviceID)
+        }
+        activity.stopStream = { [weak self] in self?.mesh.stop() }
+        mesh.onRecordingFrame = { [weak self] pcm in self?.activity.receiveRemoteFrame(pcm) }
+        mesh.onLevel = { [weak self] id, pcm, recording in self?.activity.showStreamLevel(id, pcm: pcm, recording: recording) }
+        mesh.onFinished = { [weak self] in
+            guard let self else { return }
+            self.activity.finishRemoteRecording(); self.pendingRemoteRecording = nil
+            self.activity.clearStreams()
         }
         activityObservation = mesh.$active.sink { [weak self] active in if !active { self?.activity.clearWaiting() } }
         mesh.request = { [weak self] envelope, endpoint, completion in
@@ -417,8 +429,9 @@ public final class HubStore: ObservableObject {
     }
     func receive(_ envelope: SignedEnvelope, respond: @escaping (SignedEnvelope) -> Void) {
         if receiveDeviceMove(envelope, respond: respond) { return }
+        if receiveRecordingRequest(envelope, respond: respond) { return }
         if answerInventory(envelope, respond: respond) { return }
-        if let identity, mesh.receive(envelope, nearby: nearby, friends: friends, identity: identity, card: card, devices: reportedAudioDevices, autoApprove: automaticPairedPlayback, respond: respond) { return }
+        if let identity, mesh.receive(envelope, nearby: nearby, friends: friends, identity: identity, card: card, devices: reportedAudioDevices, autoApprove: automaticPairedPlayback, expectedRecordingID: pendingRemoteRecording?.request, expectedRecordingPeer: pendingRemoteRecording?.peer, respond: respond) { return }
         guard let message = try? envelope.verified(as: JoinMessage.self), message.version == 1,
               message.peer.publicKey == envelope.signer, message.peer.id != deviceID,
               !message.peer.name.isEmpty, message.peer.name.count <= 60,

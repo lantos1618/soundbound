@@ -16,19 +16,21 @@ A native macOS and iOS app for managing audio devices and sharing sound with per
 - Organize local and paired devices into rooms. Local and paired devices can belong to multiple rooms. Inputs and outputs sit beneath their host device. Adding the host includes its attached components; individual components can also be added separately. Room definitions and layouts mirror from their creating device to nearby paired devices; edits stay on the creating device. Membership does not grant audio access.
 - Distinguish built-in, Bluetooth, Apple Continuity, wired, and virtual endpoints. Drag wireless headphones onto a host to request a move; built-in hardware stays attached. iPhone uses Apple’s output chooser after approval.
 - Configure per-device change confirmations, notifications, and removal after a sustained disconnect.
-- Tap a device icon for a short test tone; green shows playback, amber shows a pending request. Hold an input icon to record in red with a live level indicator.
+- Tap a device icon for a short test tone; green shows playback, amber shows a pending request. Tap a local microphone to record; tap again to stop. A red amplitude waveform shows captured audio.
 - Tap a room name to test its available outputs in sequence. Paired devices play automatically unless that setting is turned off.
 
 Both apps use the version and build number in `VERSION`, shown at the bottom of Settings.
 
 Right-click a room heading or open its gear menu to delete a room. Deletion keeps paired devices intact.
 
+Drag device rows by their names to add them to rooms; right-click on Mac or long-press on iPhone for settings. Remote microphone recording sends a signed request to the source device for approval, then returns encrypted audio into memory on the requesting device. This new path still needs a live two-device test.
+
 ## Try audio sharing
 
 1. Open Soundbound on both devices and enable Discover. A shared Wi-Fi network is the simplest setup; Apple peer-to-peer discovery is also enabled.
 2. Tap **+** beside **Devices**, send a pairing request, and approve it on the other device. Compare the device fingerprint when pairing.
 3. Tap an output device’s icon to send a short test tone, or tap a room name to test the room in sequence.
-4. Paired receivers play automatically by default. Hold a local input icon to record; release to stop. Recordings stay in memory on that device.
+4. Paired receivers play automatically by default. Tap a local microphone to record; tap again to stop. Recordings stay in memory on that device.
 
 Use headphones to avoid acoustic feedback. This build shares one source with one receiver; it does not yet mix multiple sources or synchronize speakers.
 

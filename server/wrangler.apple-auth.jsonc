@@ -1,0 +1,32 @@
+{
+  "name": "soundbound-auth",
+  "main": "apple-auth.mjs",
+  "compatibility_date": "2026-11-11",
+  "workers_dev": true,
+  "preview_urls": false,
+  "observability": {
+    "enabled": false
+  },
+  "vars": {
+    "APPLE_SERVICE_ID": "app.soundbound.web",
+    "APPLE_TEAM_ID": "3QX8AT4S7W",
+    "APPLE_AUTH_CALLBACK_URL": "https://soundbound-auth.l-leong1618.workers.dev/apple/callback"
+  },
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "APPLE_AUTH",
+        "class_name": "AppleAuthBroker"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": [
+        "AppleAuthBroker"
+      ]
+    }
+  ],
+  "account_id": "0473ccf7970b64735f293ac6da110007"
+}

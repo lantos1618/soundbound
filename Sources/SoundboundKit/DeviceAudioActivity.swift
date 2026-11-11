@@ -8,13 +8,23 @@ public final class DeviceAudioActivity: ObservableObject {
     @Published public private(set) var message: String?
     @Published public private(set) var messageID: String?
     @Published public private(set) var recordedID: String?
+    @Published public private(set) var waveforms: [String: [Double]] = [:]
     private var clip = Data()
     private let io = MeshAudioIO()
     private var generation = UUID()
+    private var remoteCaptureID: String?
     private var captureID: String?
     private var held = false
     private var playbackTimer: DispatchSourceTimer?
+    var stopStream: (() -> Void)?
     public init() {}
+    public func updateLevel(_ id: String, pcm: Data) {
+        let value = Self.level(pcm)
+        levels[id] = value
+        var history = waveforms[id] ?? []
+        history.append(value)
+        waveforms[id] = Array(history.suffix(24))
+    }
     public func showRecordingHint(_ id: String) {
         messageID = id
         message = "Hold the microphone icon to record. Release to stop, then choose Replay."
@@ -37,7 +47,7 @@ public final class DeviceAudioActivity: ObservableObject {
         playbackTimer?.cancel(); playbackTimer = nil
         if let old = recordedID { modes[old] = nil; levels[old] = nil }
         let token = UUID(); generation = token; captureID = device.id; held = true
-        clip = Data(); recordedID = nil; messageID = device.id; message = "Waiting for microphone permission…"
+        clip = Data(); recordedID = nil; messageID = device.id; modes[device.id] = .waiting; message = "Waiting for microphone permission…"
         MeshAudioIO.microphonePermission { [weak self] allowed in
             guard let self, self.generation == token, self.held else { return }
             guard allowed else { self.message = "Allow microphone access in Settings to record."; self.endRecording(device.id); return }
@@ -46,11 +56,11 @@ public final class DeviceAudioActivity: ObservableObject {
                     DispatchQueue.main.async {
                         guard let self, self.generation == token, self.held else { return }
                         if self.clip.count + data.count <= 1_440_000 { self.clip.append(data) }
-                        self.levels[device.id] = Self.level(data)
+                        self.updateLevel(device.id, pcm: data)
                     }
                 }
                 self.modes[device.id] = .recording
-                self.message = "Recording \(device.name) — release to stop."
+                self.message = "Recording \(device.name) — tap to stop."
                 DispatchQueue.main.asyncAfter(deadline: .now() + 30) { [weak self] in
                     guard self?.generation == token else { return }; self?.endRecording(device.id)
                 }
@@ -58,11 +68,11 @@ public final class DeviceAudioActivity: ObservableObject {
         }
     }
     public func endRecording(_ id: String) {
-        guard captureID == id else { return }
+        guard captureID == id else { if modes[id] == .recording || modes[id] == .waiting { stopStream?() }; return }
         held = false; generation = UUID(); captureID = nil; io.stop()
         modes[id] = nil; levels[id] = nil
         if !clip.isEmpty { recordedID = id; message = "Recording ready. It stays on this device in memory." }
-        else if message == "Waiting for microphone permission…" { message = "Hold the microphone again to record." }
+        else if message == "Waiting for microphone permission…" { message = "Tap the microphone again to record." }
     }
     public func playRecording(_ id: String) {
         guard recordedID == id, !clip.isEmpty, captureID == nil else { return }
@@ -84,9 +94,30 @@ public final class DeviceAudioActivity: ObservableObject {
                 return
             }
             let frame = Data(data[offset..<min(offset + 960, data.count)])
-            self.io.play(frame); self.levels[id] = Self.level(frame); offset += frame.count
+            self.io.play(frame); self.updateLevel(id, pcm: frame); offset += frame.count
         }
         timer.resume()
+    }
+    public func clearStreams() {
+        for id in Array(modes.keys) where id != captureID { clear(id) }
+    }
+    public func clear(_ id: String) { modes[id] = nil; levels[id] = nil; waveforms[id] = nil }
+    public func beginRemoteRecording(_ id: String) {
+        stopRecording(); stopPlayback(); remoteCaptureID = id
+        clip = Data(); recordedID = nil; modes[id] = .waiting
+    }
+    public func receiveRemoteFrame(_ pcm: Data) {
+        guard let id = remoteCaptureID else { return }
+        if clip.count + pcm.count <= 1_440_000 { clip.append(pcm) }
+        modes[id] = .recording; updateLevel(id, pcm: pcm)
+    }
+    public func finishRemoteRecording() {
+        guard let id = remoteCaptureID else { return }
+        remoteCaptureID = nil; clear(id)
+        if !clip.isEmpty { recordedID = id }
+    }
+    public func showStreamLevel(_ id: String, pcm: Data, recording: Bool) {
+        modes[id] = recording ? .recording : .chirping; updateLevel(id, pcm: pcm)
     }
     public func stopPlayback() {
         guard captureID == nil else { return }

@@ -12,12 +12,14 @@ final class PhoneAudioModel: ObservableObject {
     private var testGeneration = UUID()
     @Published var message: String?
     var onTestStarted: ((String) -> Void)?
+    var onTestFrame: ((String, Data) -> Void)?
     func perform(_ action: LocalAudioAction, id: String) {
+        if case .stopTest = action { testGeneration = UUID(); testTone.stop(); testPlayback.stop(); return }
         guard case .testOutput = action, devices.contains(where: { $0.id == id && $0.hasOutput && $0.selectedOutput }) else { return }
         do {
             let generation = UUID(); testGeneration = generation
             try testPlayback.startPlayback(expectedOutputID: id)
-            testTone.startTestTone { [weak self] in self?.testPlayback.play($0) }
+            testTone.startTestTone { [weak self] pcm in self?.testPlayback.play(pcm); self?.onTestFrame?(id, pcm) }
             onTestStarted?(id)
             message = "Playing test sound"
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) { [weak self] in
@@ -44,7 +46,7 @@ final class PhoneAudioModel: ObservableObject {
             return device
         }
         var inputs = route.inputs.map { port -> LocalAudioDevice in
-            var device = LocalAudioDevice(id: "input:" + port.uid, name: port.portName,
+            var device = LocalAudioDevice(id: port.portType == .builtInMic ? "builtin-microphone" : "input:" + port.uid, name: port.portName,
                 icon: "mic", detail: "This iPhone · Microphone input", status: "Current route")
             device.hasInput = true; device.selectedInput = true
             device.connection = port.portType == .builtInMic ? .builtIn : (port.portType == .bluetoothHFP ? .bluetooth : .wired)
@@ -66,7 +68,7 @@ struct SoundboundMobileApp: App {
     var body: some Scene {
         WindowGroup {
             SoundboundRootView(store: store, localAudioDevices: audio.devices, audioMessage: audio.message, onAudioAction: { audio.perform($0, id: $1) })
-                .onAppear { audio.onTestStarted = { store.activity.chirp($0); store.activity.chirp(store.deviceID) } }
+                .onAppear { audio.onTestStarted = { store.activity.chirp($0); store.activity.chirp(store.deviceID) }; audio.onTestFrame = { store.activity.updateLevel($0, pcm: $1) } }
                 .onOpenURL { url in
                     if url.host != "auth" { store.join(codeOrLink: url.absoluteString) }
                 }

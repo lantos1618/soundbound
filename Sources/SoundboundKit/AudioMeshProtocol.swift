@@ -12,6 +12,7 @@ struct AudioOffer: Codable {
     var created: Date
     var source = "microphone"
     var outputID: String? = nil
+    var recordingID: String? = nil
 }
 struct AudioReply: Codable {
     var kind = "audio-reply"

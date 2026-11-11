@@ -1,9 +1,10 @@
 # Apple sign-in
 
-Soundbound has two distinct sign-in paths:
+Settings presents one **Sign in with Apple** button when signed out and **Sign out** when signed in. Signing out immediately makes sign-in available again.
 
-- **Sign in with Apple** uses the device’s native Apple authorization sheet. It is tied to the Apple Account available to the OS.
-- **Use another Apple Account** opens an ephemeral web authorization session. Apple may still offer the device’s account first. Account selection is controlled by Apple’s page; Soundbound does not change the device’s iCloud account.
+The visible sign-in uses the device’s native Apple authorization sheet. It is tied to the Apple Account available to the OS. Signing out of Soundbound does not sign the device out of iCloud or force Apple to offer a different account.
+
+The experimental web broker remains in source but has no separate Settings control. Its alternate-account flow has not been validated end to end.
 
 Signing out cancels pending authorization, clears Soundbound’s cached profile, and invalidates outstanding credential checks. A late check cannot sign the app back in.
 

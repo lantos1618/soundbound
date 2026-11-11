@@ -48,6 +48,7 @@ public final class HubStore: ObservableObject {
     public let activity = DeviceAudioActivity()
     private var activityObservation: AnyCancellable?
     @Published public internal(set) var deviceMoveRequest: DeviceMoveRequest?
+    @Published public internal(set) var outgoingDeviceMove: HeadphoneMoveProgress?
     public var onApprovedDeviceMove: ((String) -> Void)?
     @Published public internal(set) var recordingRequest: RemoteRecordingRequest?
     var recordingReply: ((SignedEnvelope) -> Void)?
@@ -354,6 +355,12 @@ public final class HubStore: ObservableObject {
 
     func observePeerAudioDevices(_ devices: [LocalAudioDevice], peerID: String, now: Date = Date()) {
         let reconciled = AudioDeviceInventory.reconcile(devices)
+        if var move = outgoingDeviceMove, move.targetID == peerID,
+           move.phase == .requesting || move.phase == .waitingForConnection,
+           reconciled.contains(where: { AudioDeviceInventory.identity(of: $0) == move.deviceIdentity && $0.isAvailable && $0.selectedOutput }) {
+            move.phase = .connected
+            outgoingDeviceMove = move
+        }
         let oldIDs = (peerAudioDevices[peerID] ?? []).map { Self.remoteComponentID(peer: peerID, component: $0.id) }
         let observed = Dictionary(uniqueKeysWithValues: reconciled.map { (Self.remoteComponentID(peer: peerID, component: $0.id), $0) })
         for id in Set(oldIDs).union(observed.keys) {
@@ -363,6 +370,7 @@ public final class HubStore: ObservableObject {
         }
         peerAudioDevices[peerID] = reconciled.isEmpty ? nil : reconciled
     }
+    public func dismissDeviceMoveStatus() { outgoingDeviceMove = nil }
 
     public func movePeer(_ id: String, to roomID: String?) {
         guard friends.contains(where: { $0.id == id }), identity != nil,

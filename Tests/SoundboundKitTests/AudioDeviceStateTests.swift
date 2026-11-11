@@ -78,4 +78,16 @@ final class AudioDeviceStateTests: XCTestCase {
         store.observePeerAudioDevices([], peerID: peer)
         XCTAssertEqual(store.audioDeviceStates[id]?.observed, .disconnected)
     }
+    func testMoveRequiresMatchingHostIdentityAndSelectedOutput() throws {
+        let store = HubStore(identity: try Identity(ephemeral: true), defaults: UserDefaults(suiteName: UUID().uuidString)!)
+        store.outgoingDeviceMove = HeadphoneMoveProgress(id: "request", targetID: "target", deviceIdentity: "headphones", deviceName: "AirPods", targetName: "Phone")
+        var wrongDevice = device("other"); wrongDevice.selectedOutput = true
+        store.observePeerAudioDevices([wrongDevice], peerID: "target")
+        XCTAssertEqual(store.outgoingDeviceMove?.phase, .requesting)
+        var correctDevice = device("headphones"); correctDevice.selectedOutput = true
+        store.observePeerAudioDevices([correctDevice], peerID: "other-host")
+        XCTAssertEqual(store.outgoingDeviceMove?.phase, .requesting)
+        store.observePeerAudioDevices([correctDevice], peerID: "target")
+        XCTAssertEqual(store.outgoingDeviceMove?.phase, .connected)
+    }
 }

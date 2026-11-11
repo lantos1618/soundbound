@@ -1,5 +1,24 @@
 import Foundation
 
+public struct HeadphoneMoveProgress: Equatable {
+    public enum Phase: String { case requesting, waitingForConnection, connected, declined, failed }
+    public let id: String
+    public let targetID: String
+    public let deviceIdentity: String
+    public let deviceName: String
+    public let targetName: String
+    public var phase: Phase = .requesting
+    public var message: String {
+        switch phase {
+        case .requesting: return "Asking to move \(deviceName) to \(targetName)…"
+        case .waitingForConnection: return "Move allowed. Waiting for \(targetName) to connect…"
+        case .connected: return "\(deviceName) connected on \(targetName)."
+        case .declined: return "Move to \(targetName) declined."
+        case .failed: return "Connection to \(targetName) wasn’t confirmed."
+        }
+    }
+}
+
 public struct DeviceMoveRequest: Codable, Identifiable {
     var kind = "device-move-request"
     public var id = UUID().uuidString
@@ -34,14 +53,29 @@ extension HubStore {
         }
         let request = DeviceMoveRequest(sender: card, recipient: hostID, deviceName: device.name, sourceName: sourceName)
         guard let signed = try? identity.sign(request) else { return }
+        outgoingDeviceMove = HeadphoneMoveProgress(id: request.id, targetID: hostID,
+            deviceIdentity: AudioDeviceInventory.identity(of: device), deviceName: device.name,
+            targetName: peer.invitation.peer.name)
         audioNotice = "Asking \(peer.invitation.peer.name) to use \(device.name)…"
         network.request(signed, endpoint: peer.endpoint) { [weak self] result in
-            guard let self, case let .success(envelope) = result,
+            guard let self, self.outgoingDeviceMove?.id == request.id else { return }
+            guard case let .success(envelope) = result,
                   envelope.signer == peer.invitation.peer.publicKey,
                   let reply = try? envelope.verified(as: DeviceMoveReply.self),
                   reply.kind == "device-move-reply", reply.requestID == request.id,
-                  reply.recipient == self.deviceID, abs(reply.created.timeIntervalSinceNow) < 120 else { return }
+                  reply.recipient == self.deviceID, abs(reply.created.timeIntervalSinceNow) < 120 else {
+                self.outgoingDeviceMove?.phase = .failed
+                return
+            }
+            if self.outgoingDeviceMove?.phase != .connected {
+                self.outgoingDeviceMove?.phase = reply.accepted ? .waitingForConnection : .declined
+            }
             self.audioNotice = reply.accepted ? "Request accepted. Waiting for the headphone connection to change." : "Headphone move declined."
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 30) { [weak self] in
+            guard let self, let move = self.outgoingDeviceMove, move.id == request.id,
+                  move.phase == .requesting || move.phase == .waitingForConnection else { return }
+            self.outgoingDeviceMove?.phase = .failed
         }
     }
     func receiveDeviceMove(_ envelope: SignedEnvelope, respond: @escaping (SignedEnvelope) -> Void) -> Bool {

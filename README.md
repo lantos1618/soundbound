@@ -11,16 +11,18 @@ A native macOS and iOS app for managing audio devices and sharing sound with per
 - Keep devices in several rooms and activate one room at a time on each host; turning a room off keeps its membership. Room activation does not yet create a synchronized multi-device mix.
 - Select the Mac’s output or microphone and adjust supported hardware volume.
 - Pair devices using a compact nearby QR code card, an inline iPhone camera scanner, short codes, nearby discovery, and explicit approval.
-- Sign in with Apple in signed builds. Use the native button for the device’s iCloud account, or Use another Apple Account for a separate web login. Account-wide friends and room permissions are not connected yet.
+- Sign in with Apple in signed builds. Native sign-in works with the device’s Apple Account. The separate web sign-in flow is deployed but still being validated on devices. Account-wide friends and room permissions are not connected yet.
+- Reconciled device inventories and separate [observed/requested device states](docs/DEVICE-STATE.md), without treating a requested connection as confirmed.
 - Send a short test tone or share a microphone with one paired receiver.
-- Stop audio from either device. Paired devices are allowed to play audio automatically by default; this can be changed in Settings. iPhone can notify you about a request that reaches the running app. Sharing a microphone still requires microphone permission and an explicit source action.
+- Stop audio from either device. Pairing grants playback permission, without another approval for each sound. Unpaired devices cannot send audio. Sharing a microphone still requires microphone permission and an explicit source action.
 - Organize local and paired devices into rooms. Local and paired devices can belong to multiple rooms. Inputs and outputs sit beneath their host device. Adding the host includes its attached components; individual components can also be added separately. Room definitions and layouts mirror from their creating device to nearby paired devices; edits stay on the creating device. Membership does not grant audio access.
 - Distinguish built-in, Bluetooth, Apple Continuity, wired, and virtual endpoints. Drag wireless headphones onto a host to request a move; built-in hardware stays attached. iPhone uses Apple’s output chooser after approval.
 - Configure per-device change confirmations, notifications, and removal after a sustained disconnect.
 - Tap a device icon for a short test tone; green shows playback, amber shows a pending request. Tap a local microphone to record; tap again to stop. A red amplitude waveform shows captured audio.
-- Tap a room name to test its available outputs in sequence. Paired devices play automatically unless that setting is turned off.
+- Tap a room name to test its available outputs in sequence. Paired devices play automatically.
 
 Both apps use the version and build number in `VERSION`, shown at the bottom of Settings.
+Run `bash scripts/build-both.sh` to build the same source for both platforms and verify both bundles match `VERSION`. A mismatched pair fails the build check. UI, device state, pairing, room logic, and the audio transport live in the shared `SoundboundKit` package; platform adapters handle macOS Core Audio and iOS audio sessions.
 
 Right-click a room heading or open its gear menu to delete a room. Deletion keeps paired devices intact.
 

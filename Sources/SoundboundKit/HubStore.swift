@@ -19,9 +19,7 @@ public final class HubStore: ObservableObject {
     @Published public private(set) var requests: [AccessRequest] = []
     @Published public private(set) var outgoing: Set<String> = []
     @Published public private(set) var discovering = false
-    @Published public var automaticPairedPlayback: Bool {
-        didSet { defaults.set(automaticPairedPlayback, forKey: "Soundbound.automaticPairedPlayback") }
-    }
+    public let automaticPairedPlayback = true
     @Published public var notice: String?
     @Published public private(set) var discoveryStatus = "Discovery is off"
     @Published public private(set) var inviteLink = ""
@@ -37,6 +35,7 @@ public final class HubStore: ObservableObject {
         didSet { if let audioNotice { onAudioNotice?(audioNotice) } }
     }
     private var lastAudioDevices: [String: LocalAudioDevice] = [:]
+    @Published public private(set) var audioDeviceStates: [String: AudioDeviceState] = [:]
     private var audioObservationStarted = false
     private var unavailableSince: [String: Date] = [:]
     @Published public private(set) var audioRooms: [String: String]
@@ -90,7 +89,6 @@ public final class HubStore: ObservableObject {
     public init(identity: Identity? = nil, defaults: UserDefaults = .standard) {
         self.defaults = defaults
         self.activeRoomID = defaults.string(forKey: "Soundbound.activeRoom")
-        self.automaticPairedPlayback = defaults.object(forKey: "Soundbound.automaticPairedPlayback") as? Bool ?? true
         self.persistenceKey = Identity.usesDevelopmentFile ? "SoundboundHub.development.v1" : "SoundboundHub.v1"
         self.identity = identity
         let savedData = defaults.data(forKey: persistenceKey) ?? defaults.data(forKey: "SoundboundHub.v1")
@@ -300,7 +298,14 @@ public final class HubStore: ObservableObject {
         persist()
     }
     public func observeAudioDevices(_ devices: [LocalAudioDevice], now: Date = Date()) {
+        let devices = AudioDeviceInventory.reconcile(devices)
         reportedAudioDevices = devices
+        let observed = Dictionary(uniqueKeysWithValues: devices.map { ($0.id, $0) })
+        for id in Set(audioDeviceStates.keys.filter { !$0.hasPrefix("remote:") }).union(observed.keys) {
+            var state = audioDeviceStates[id] ?? AudioDeviceState()
+            state.observe(observed[id], now: now)
+            audioDeviceStates[id] = state
+        }
         refreshPeerInventories(now: now)
         var current = Dictionary(devices.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         for (id, old) in lastAudioDevices where current[id] == nil {
@@ -331,6 +336,32 @@ public final class HubStore: ObservableObject {
         }
         lastAudioDevices = current
         audioObservationStarted = true
+    }
+
+    public func recordAudioIntent(_ action: LocalAudioAction, id: String) {
+        let intent: AudioDeviceState.Intent
+        switch action {
+        case .connect: intent = .connect
+        case .disconnect: intent = .disconnect
+        case .useInput: intent = .useInput
+        case .useOutput: intent = .useOutput
+        default: return
+        }
+        var state = audioDeviceStates[id] ?? AudioDeviceState()
+        state.request(intent)
+        audioDeviceStates[id] = state
+    }
+
+    func observePeerAudioDevices(_ devices: [LocalAudioDevice], peerID: String, now: Date = Date()) {
+        let reconciled = AudioDeviceInventory.reconcile(devices)
+        let oldIDs = (peerAudioDevices[peerID] ?? []).map { Self.remoteComponentID(peer: peerID, component: $0.id) }
+        let observed = Dictionary(uniqueKeysWithValues: reconciled.map { (Self.remoteComponentID(peer: peerID, component: $0.id), $0) })
+        for id in Set(oldIDs).union(observed.keys) {
+            var state = audioDeviceStates[id] ?? AudioDeviceState()
+            state.observe(observed[id], now: now)
+            audioDeviceStates[id] = state
+        }
+        peerAudioDevices[peerID] = reconciled.isEmpty ? nil : reconciled
     }
 
     public func movePeer(_ id: String, to roomID: String?) {

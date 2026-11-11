@@ -19,8 +19,9 @@ public struct SoundboundRootView: View {
     public init(store: HubStore, localAudioDevices: [LocalAudioDevice] = [], audioMessage: String? = nil,
                 onAudioAction: @escaping (LocalAudioAction, String) -> Void = { _, _ in },
                 onAudioVolume: @escaping (String, Double) -> Void = { _, _ in }) {
-        self.store = store; self.localAudioDevices = localAudioDevices; self.audioMessage = audioMessage
-        self.onAudioAction = onAudioAction; self.onAudioVolume = onAudioVolume
+        self.store = store; self.localAudioDevices = AudioDeviceInventory.reconcile(localAudioDevices); self.audioMessage = audioMessage
+        self.onAudioAction = { action, id in store.recordAudioIntent(action, id: id); onAudioAction(action, id) }
+        self.onAudioVolume = onAudioVolume
     }
     public var body: some View {
         NavigationStack {
@@ -344,7 +345,7 @@ private struct LocalAudioRow: View {
                 }
                 DeviceRowText(name: device.name,
                     detail: device.connectionLabel + " · " + (device.hasInput && device.hasOutput ? "Input & output" : device.hasInput ? "Microphone" : "Speaker"),
-                    activity: store.activity, id: device.id, status: device.status, canReplay: true)
+                    activity: store.activity, id: device.id, status: connectionStatus, canReplay: true)
                     .modifier(DeviceDragArea(id: "audio:" + device.id, name: device.name))
 
 
@@ -387,6 +388,18 @@ private struct LocalAudioRow: View {
         .onChange(of: device.volume) { value in if !editing { level = value ?? 0.5 } }
         .onChange(of: level) { value in
             if let actual = device.volume, abs(value - actual) > 0.005 { volumeChanged(device.id, value) }
+        }
+    }
+    private var connectionStatus: String {
+        guard let state = store.audioDeviceStates[device.id] else { return device.status }
+        if state.transition == .failed { return "Change not confirmed" }
+        guard state.transition == .pending else { return device.status }
+        switch state.intent {
+        case .connect: return "Connecting…"
+        case .disconnect: return "Disconnecting…"
+        case .useInput: return "Changing input…"
+        case .useOutput: return "Changing output…"
+        case .none: return device.status
         }
     }
 }
@@ -563,12 +576,10 @@ private struct HomeView: View {
                                 }
                             }
                         ForEach(localAudioDevices) { device in
-                            Divider().padding(.leading, 76)
                             LocalAudioRow(device: device, store: store, action: onAudioAction, volumeChanged: onAudioVolume)
                                 .padding(.leading, nestedDeviceIndent)
                         }
                         ForEach(store.friends) { peer in
-                            Divider().padding(.leading, 76)
                             peerRow(peer)
                             ForEach(store.peerAudioDevices[peer.id] ?? []) { component in
                                 remoteComponentRow(component, peer: peer)
@@ -621,18 +632,13 @@ private struct HomeView: View {
                                     showingDeleteConfirmation = true
                                 }.disabled(room.owner != store.deviceID)
                             }
-                            Divider()
                             VStack(spacing: 0) {
                                 if store.deviceRooms.contains(room.id) { roomDeviceRow(stacked: false) }
                                 ForEach(localAudioDevices.filter { store.audioDevice($0.id, belongsTo: room.id) }) { device in
-                                    if store.deviceRooms.contains(room.id) || localAudioDevices.first(where: { store.audioDevice($0.id, belongsTo: room.id) })?.id != device.id {
-                                        Divider().padding(.leading, 76)
-                                    }
                                     LocalAudioRow(device: device, store: store, action: onAudioAction, volumeChanged: onAudioVolume)
                                         .padding(.leading, store.deviceRooms.contains(room.id) ? nestedDeviceIndent : 0)
                                 }
                                 ForEach(store.friends.filter { store.peerMemberships[$0.id]?.contains(room.id) == true }) { peer in
-                                    Divider().padding(.leading, 76)
                                     peerRow(peer)
                                     ForEach(store.peerAudioDevices[peer.id] ?? []) { component in
                                         remoteComponentRow(component, peer: peer).padding(.leading, nestedDeviceIndent)
@@ -1224,17 +1230,6 @@ private struct SettingsView: View {
                     Spacer()
                     Text(store.fingerprint).font(.system(.body, design: .monospaced))
                 }
-            }
-            #if os(iOS)
-            DetailSection(title: "Playback requests") {
-                PlaybackNotificationSettings()
-            }
-            #endif
-            DetailSection(title: "Paired devices") {
-                Toggle("Play audio from paired devices automatically", isOn: $store.automaticPairedPlayback)
-                    .toggleStyle(.switch)
-                Text("Pairing grants playback permission. Microphones still need an explicit record or share action.")
-                    .font(.caption).foregroundStyle(.secondary)
             }
             DetailSection(title: "Nearby discovery") {
                 Toggle("Let nearby devices find me", isOn: Binding(get: { store.discovering }, set: { store.setDiscovery($0) }))

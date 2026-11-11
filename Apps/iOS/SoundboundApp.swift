@@ -43,6 +43,7 @@ final class PhoneAudioModel: ObservableObject {
                 detail: "This iPhone · Audio output", status: "Current route")
             device.hasOutput = true; device.selectedOutput = true
             device.connection = builtIn ? .builtIn : ([.bluetoothA2DP, .bluetoothHFP, .bluetoothLE].contains(port.portType) ? .bluetooth : .wired)
+            if device.connection == .bluetooth { device.physicalID = "ios-port:" + port.uid }
             return device
         }
         var inputs = route.inputs.map { port -> LocalAudioDevice in
@@ -50,6 +51,7 @@ final class PhoneAudioModel: ObservableObject {
                 icon: "mic", detail: "This iPhone · Microphone input", status: "Current route")
             device.hasInput = true; device.selectedInput = true
             device.connection = port.portType == .builtInMic ? .builtIn : (port.portType == .bluetoothHFP ? .bluetooth : .wired)
+            if device.connection == .bluetooth { device.physicalID = "ios-port:" + port.uid }
             return device
         }
         if inputs.isEmpty {
@@ -57,7 +59,7 @@ final class PhoneAudioModel: ObservableObject {
             microphone.hasInput = true; microphone.connection = .builtIn
             inputs.append(microphone)
         }
-        devices = outputs + inputs
+        devices = AudioDeviceInventory.reconcile(outputs + inputs)
     }
 }
 

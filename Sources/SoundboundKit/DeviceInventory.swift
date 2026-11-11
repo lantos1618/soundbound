@@ -36,7 +36,9 @@ extension HubStore {
         guard discovering, let identity, now.timeIntervalSince(lastInventoryRefresh) >= 5 else { return }
         lastInventoryRefresh = now
         let online = Set(nearby.map(\.id))
-        peerAudioDevices = peerAudioDevices.filter { online.contains($0.key) }
+        for id in Array(peerAudioDevices.keys) where !online.contains(id) {
+            observePeerAudioDevices([], peerID: id, now: now)
+        }
         for peer in nearby where friends.contains(where: { $0.id == peer.id }) && !inventoryPending.contains(peer.id) {
             let request = InventoryRequest(recipient: peer.id)
             guard let signed = try? identity.sign(request) else { continue }
@@ -51,12 +53,12 @@ extension HubStore {
                       reply.kind == "device-inventory-reply", reply.requestID == request.id,
                       reply.recipient == self.deviceID, abs(reply.created.timeIntervalSinceNow) < 30,
                       reply.devices.count <= 32,
-                      reply.devices.allSatisfy({ $0.id.count <= 512 && $0.name.count <= 256 }) else { return }
+                      reply.devices.allSatisfy({ $0.id.count <= 512 && $0.name.count <= 256 && ($0.physicalID?.count ?? 0) <= 512 }) else { return }
                 if let card = reply.peer, card.id == peer.id, card.publicKey == envelope.signer, !card.name.isEmpty, card.name.count <= 60 {
                     self.updatePeerCard(card)
                 }
                 if let rooms = reply.rooms { _ = self.mergeRoomLayouts(rooms, from: peer.id) }
-                self.peerAudioDevices[peer.id] = reply.devices
+                self.observePeerAudioDevices(reply.devices, peerID: peer.id)
             }
         }
     }

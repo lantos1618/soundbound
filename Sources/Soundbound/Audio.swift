@@ -167,7 +167,7 @@ final class SoundModel: NSObject, ObservableObject {
             row.canConnect = watchedAddress != nil; row.busy = busy
             rows.append(row)
         }
-        return rows
+        return AudioDeviceInventory.reconcile(rows)
     }
 
     var headphoneName: String { watchedName }

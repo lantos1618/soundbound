@@ -51,5 +51,17 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 <key>NSHighResolutionCapable</key><true/>
 </dict></plist>
 PLIST
+python3 - "$APP/Contents/Info.plist" <<'PY'
+import plistlib, sys
+from pathlib import Path
+version, build = Path('VERSION').read_text().split()
+path = Path(sys.argv[1])
+with path.open('rb') as f:
+    info = plistlib.load(f)
+info['CFBundleShortVersionString'] = version
+info['CFBundleVersion'] = build
+with path.open('wb') as f:
+    plistlib.dump(info, f)
+PY
 codesign --force --deep --sign - "$APP"
 printf 'Built %s\n' "$APP"

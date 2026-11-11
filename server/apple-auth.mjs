@@ -60,10 +60,12 @@ export async function verifyAppleIdentityToken(token, {audience, nonce, now = Da
   if (!await crypto.subtle.verify('RSASSA-PKCS1-v1_5', publicKey, decode(parts[2]), new TextEncoder().encode(`${parts[0]}.${parts[1]}`))) throw new Error('signature');
   const claims = JSON.parse(new TextDecoder().decode(decode(parts[1])));
   const seconds = Math.floor(now / 1000);
-  if (claims.iss !== APPLE_ISSUER || claims.aud !== audience || claims.nonce !== nonce ||
-      !Number.isFinite(claims.exp) || claims.exp <= seconds ||
-      !Number.isFinite(claims.iat) || claims.iat > seconds + 60 ||
-      typeof claims.sub !== 'string' || claims.sub.length === 0 || claims.sub.length > 255) throw new Error('claims');
+  if (claims.iss !== APPLE_ISSUER) throw new Error('issuer');
+  if (claims.aud !== audience) throw new Error('audience');
+  if (claims.nonce !== nonce) throw new Error('nonce');
+  if (!Number.isFinite(claims.exp) || claims.exp <= seconds) throw new Error('expired');
+  if (!Number.isFinite(claims.iat) || claims.iat > seconds + 60) throw new Error('issued_at');
+  if (typeof claims.sub !== 'string' || claims.sub.length === 0 || claims.sub.length > 255) throw new Error('subject');
   return claims;
 }
 
@@ -72,6 +74,9 @@ export async function handleAppleAuth(request, env, storage, dependencies = {}) 
   const upstream = dependencies.fetch ?? fetch;
   const now = dependencies.now ?? Date.now();
   const randomToken = dependencies.random ?? random;
+  // Only fixed, non-user error categories may be logged. Never log request URLs,
+  // state, codes, token responses, identities, or arbitrary exception strings.
+  const diagnostic = dependencies.diagnostic ?? (category => console.warn(`apple-auth:${category}`));
   const url = new URL(request.url);
   if (url.pathname === '/apple/health') return json(200, {service: 'soundbound-apple-auth', configured: configured(env)});
   if (!configured(env)) return json(503, {error: 'Apple web sign-in is not configured'});
@@ -90,33 +95,50 @@ export async function handleAppleAuth(request, env, storage, dependencies = {}) 
       if (!allowed) return json(429, {error: 'Sign-in limit reached. Try tomorrow.'});
       const state = randomToken();
       await storage.put(`flow:${state}`, {clientState, nonce, challenge, expires: now + 600_000});
+      diagnostic('authorization_issued');
       const authorize = new URL(`${APPLE_ISSUER}/auth/authorize`);
       for (const [key, value] of Object.entries({client_id: env.APPLE_SERVICE_ID, redirect_uri: env.APPLE_AUTH_CALLBACK_URL,
         response_type: 'code', response_mode: 'form_post', scope: 'name email', state, nonce})) authorize.searchParams.set(key, value);
       return redirect(authorize.href);
     }
     if (url.pathname === '/apple/callback' && request.method === 'POST') {
+      diagnostic('callback_received');
       if (!request.headers.get('Content-Type')?.startsWith('application/x-www-form-urlencoded')) return json(415, {error: 'Unsupported callback'});
       const form = new URLSearchParams(await bodyText(request));
       const state = form.get('state');
-      if (!safeToken(state)) return json(400, {error: 'Invalid callback'});
+      if (!safeToken(state)) { diagnostic('callback_invalid_state'); return json(400, {error: 'Invalid callback'}); }
       const flow = await storage.transaction(async tx => {
         const record = await tx.get(`flow:${state}`);
         await tx.delete(`flow:${state}`);
         return record;
       });
-      if (!flow || flow.expires <= now) return json(400, {error: 'Sign-in expired. Start again in Soundbound.'});
-      if (form.has('error')) return redirect(appCallback(flow.clientState, {error: 'cancelled'}));
+      if (!flow || flow.expires <= now) { diagnostic('callback_expired'); return json(400, {error: 'Sign-in expired. Start again in Soundbound.'}); }
+      if (form.has('error')) {
+        const appleError = form.get('error');
+        const category = appleError === 'access_denied' || appleError === 'user_cancelled_authorize' ? 'cancelled' :
+          ['invalid_request', 'invalid_client', 'unauthorized_client', 'invalid_scope'].includes(appleError) ? 'configuration_failed' : 'verification_failed';
+        diagnostic(category);
+        return redirect(appCallback(flow.clientState, {error: category}));
+      }
       const code = form.get('code');
       if (typeof code !== 'string' || code.length < 1 || code.length > 4096) return redirect(appCallback(flow.clientState, {error: 'invalid_response'}));
+      let failureStage = 'configuration_failed';
       try {
         const secret = await createAppleClientSecret(env, now);
+        failureStage = 'exchange_failed';
         const tokenResponse = await upstream(`${APPLE_ISSUER}/auth/token`, {method: 'POST', redirect: 'error',
           headers: {'Content-Type': 'application/x-www-form-urlencoded'},
           body: new URLSearchParams({grant_type: 'authorization_code', code, client_id: env.APPLE_SERVICE_ID,
             client_secret: secret, redirect_uri: env.APPLE_AUTH_CALLBACK_URL}).toString()});
-        if (!tokenResponse.ok) throw new Error('exchange');
+        if (!tokenResponse.ok) {
+          let appleError;
+          try { appleError = (await tokenResponse.json()).error; } catch { /* no raw failure output */ }
+          const category = appleError === 'invalid_client' ? 'configuration_failed' : 'exchange_failed';
+          diagnostic(category);
+          return redirect(appCallback(flow.clientState, {error: category}));
+        }
         const tokens = await tokenResponse.json();
+        failureStage = 'verification_failed';
         const claims = await verifyAppleIdentityToken(tokens.id_token, {audience: env.APPLE_SERVICE_ID, nonce: flow.nonce, now}, upstream);
         let name;
         try {
@@ -129,8 +151,13 @@ export async function handleAppleAuth(request, env, storage, dependencies = {}) 
           profile: {provider: 'apple', subject: claims.sub, name, email: verifiedEmail ? claims.email : undefined,
             expiresAt: Math.min(claims.exp, Math.floor(now / 1000) + 3600)}});
         // Apple's ID/access/refresh tokens are deliberately not stored or returned.
+        diagnostic('redemption_issued');
         return redirect(appCallback(flow.clientState, {code: redemption}));
-      } catch { return redirect(appCallback(flow.clientState, {error: 'verification_failed'})); }
+      } catch (error) {
+        const safeReasons = ['token', 'algorithm', 'keys', 'key', 'signature', 'issuer', 'audience', 'nonce', 'expired', 'issued_at', 'subject'];
+        diagnostic(safeReasons.includes(error?.message) ? `verification_${error.message}` : failureStage);
+        return redirect(appCallback(flow.clientState, {error: failureStage}));
+      }
     }
     if (url.pathname === '/apple/redeem' && request.method === 'POST') {
       if (!request.headers.get('Content-Type')?.startsWith('application/json')) return json(415, {error: 'Use JSON'});
@@ -144,7 +171,8 @@ export async function handleAppleAuth(request, env, storage, dependencies = {}) 
         await tx.delete(`redeem:${input.code}`);
         return item;
       });
-      if (!record) return json(401, {error: 'Sign-in code is invalid or expired'});
+      if (!record) { diagnostic('redemption_rejected'); return json(401, {error: 'Sign-in code is invalid or expired'}); }
+      diagnostic('redemption_succeeded');
       return json(200, record.profile);
     }
     return json(404, {error: 'Not found'});

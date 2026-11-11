@@ -210,15 +210,20 @@ public final class AppleAccount: NSObject, ObservableObject, ASAuthorizationCont
             DispatchQueue.main.async {
                 guard let self, self.generation == attempt, self.isBusy else { return }
                 self.webSession = nil
-                guard error == nil, let url, let callback = URLComponents(url: url, resolvingAgainstBaseURL: false),
-                      callback.scheme == "soundbound", callback.host == "auth",
-                      callback.queryItems?.first(where: { $0.name == "state" })?.value == state,
-                      let code = callback.queryItems?.first(where: { $0.name == "code" })?.value else {
+                if let error {
                     self.cancelSignIn()
-                    if error == nil { self.message = "Apple sign-in wasn’t completed. Try again." }
+                    if (error as? ASWebAuthenticationSessionError)?.code != .canceledLogin {
+                        self.message = "Apple’s sign-in page could not finish. Check your connection and try again."
+                    }
                     return
                 }
-                self.redeem(code: code, verifier: verifier, startURL: startURL, attempt: attempt)
+                switch AppleWebCallback.parse(url, expectedState: state) {
+                case .success(let code):
+                    self.redeem(code: code, verifier: verifier, startURL: startURL, attempt: attempt)
+                case .failure(let failure):
+                    self.cancelSignIn()
+                    self.message = failure.message
+                }
             }
         }
         session.presentationContextProvider = self
@@ -284,6 +289,7 @@ public final class AppleAccount: NSObject, ObservableObject, ASAuthorizationCont
 public struct AppleAccountView: View {
     @ObservedObject private var account = AppleAccount.shared
     @Environment(\.scenePhase) private var scenePhase
+    @State private var showingOptions = false
     public init() {}
     public var body: some View {
         VStack(spacing: 12) {
@@ -293,7 +299,6 @@ public struct AppleAccountView: View {
                 if account.displayName != nil || account.email != nil {
                     Text("Signed in on this device").font(.caption).foregroundStyle(.secondary)
                 }
-                Button("Sign out") { account.signOut() }.buttonStyle(.bordered)
             } else {
                 AppleAuthorizationButton(account: account)
                     .frame(width: 220, height: 44)
@@ -306,13 +311,21 @@ public struct AppleAccountView: View {
             if account.isBusy {
                 Button("Cancel sign-in") { account.cancelSignIn() }.buttonStyle(.bordered)
             } else {
-                AppleWebAccountButton(account: account)
-                    .frame(width: 220, height: 32)
-                    .disabled(!account.isWebConfigured)
-                if !account.isWebConfigured {
-                    Text("Account switching is waiting for the Apple web sign-in service.")
-                        .font(.caption).foregroundStyle(.secondary)
+                DisclosureGroup("Account options", isExpanded: $showingOptions) {
+                    VStack(spacing: 12) {
+                        if account.isSignedIn {
+                            Button("Sign out") { account.signOut(); showingOptions = false }.buttonStyle(.bordered)
+                        }
+                        AppleWebAccountButton(account: account)
+                            .frame(width: 220, height: 32)
+                            .disabled(!account.isWebConfigured)
+                        if !account.isWebConfigured {
+                            Text("Account switching is waiting for the Apple web sign-in service.")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                    }.frame(maxWidth: .infinity).padding(.top, 12)
                 }
+                .frame(maxWidth: 300)
             }
             if let message = account.message { Text(message).font(.caption).foregroundStyle(.secondary) }
         }

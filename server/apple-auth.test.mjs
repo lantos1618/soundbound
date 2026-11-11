@@ -115,3 +115,32 @@ test('incoming requests do not postpone an existing cleanup alarm', async () => 
   assert.equal(scheduled,1);
   assert.equal(alarm,first);
 });
+
+test('token exchange errors map to safe callback categories without logging codes or descriptions', async () => {
+  for (const [upstreamError, expected] of [['invalid_client','configuration_failed'],['invalid_grant','exchange_failed']]) {
+    const store = new MemoryStorage(), state='s'.repeat(43), events=[];
+    await store.put(`flow:${state}`,{clientState:'client-state',nonce:'expected-nonce',challenge:'c'.repeat(43),expires:now+60000});
+    const request=new Request(env.APPLE_AUTH_CALLBACK_URL,{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams({state,code:'secret-authorization-code'})});
+    const response=await handleAppleAuth(request,env,store,{now,diagnostic:value=>events.push(value),fetch:async()=>Response.json({error:upstreamError,error_description:'secret-private-detail'},{status:400})});
+    assert.equal(new URL(response.headers.get('Location')).searchParams.get('error'),expected);
+    assert.deepEqual(events,['callback_received',expected]);
+    assert.ok(!JSON.stringify(events).includes('secret'));
+  }
+});
+test('an Apple cancellation stays a cancellation rather than a configuration failure', async () => {
+  const store=new MemoryStorage(),state='s'.repeat(43),events=[];
+  await store.put(`flow:${state}`,{clientState:'client-state',nonce:'expected-nonce',challenge:'c'.repeat(43),expires:now+60000});
+  const request=new Request(env.APPLE_AUTH_CALLBACK_URL,{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams({state,error:'access_denied'})});
+  const response=await handleAppleAuth(request,env,store,{now,diagnostic:value=>events.push(value)});
+  assert.equal(new URL(response.headers.get('Location')).searchParams.get('error'),'cancelled');
+  assert.deepEqual(events,['callback_received','cancelled']);
+});
+test('nonce failures remain rejected and expose only a safe diagnostic category', async () => {
+  const store=new MemoryStorage(),state='s'.repeat(43),events=[];
+  await store.put(`flow:${state}`,{clientState:'client-state',nonce:'expected-nonce',challenge:'c'.repeat(43),expires:now+60000});
+  const request=new Request(env.APPLE_AUTH_CALLBACK_URL,{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams({state,code:'secret-code'})});
+  const upstream=async url=>url.endsWith('/auth/keys')?keyFetch():Response.json({id_token:await jwt({nonce:'wrong-nonce'})});
+  const response=await handleAppleAuth(request,env,store,{now,fetch:upstream,diagnostic:value=>events.push(value)});
+  assert.equal(new URL(response.headers.get('Location')).searchParams.get('error'),'verification_failed');
+  assert.deepEqual(events,['callback_received','verification_nonce']);
+});

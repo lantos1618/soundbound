@@ -3,13 +3,13 @@
 Soundbound has two distinct sign-in paths:
 
 - **Sign in with Apple** uses the device’s native Apple authorization sheet. It is tied to the Apple Account available to the OS.
-- **Use another Apple Account** opens an ephemeral web authorization session. It does not sign the Mac out of iCloud or change its Apple Account.
+- **Use another Apple Account** opens an ephemeral web authorization session. Apple may still offer the device’s account first. Account selection is controlled by Apple’s page; Soundbound does not change the device’s iCloud account.
 
 Signing out cancels pending authorization, clears Soundbound’s cached profile, and invalidates outstanding credential checks. A late check cannot sign the app back in.
 
 ## Current setup
 
-Native iOS and macOS development builds have the Sign in with Apple entitlement and provisioning profiles. The alternate-account broker is deployed at `https://soundbound-auth.l-leong1618.workers.dev`, using Services ID `app.soundbound.web`. Both app configurations point to its `/apple/start` URL. The live health check reports configured, and a start request has been verified to redirect to Apple with the registered callback. A user-completed web login is still required for end-to-end validation.
+Native iOS and macOS development builds have the Sign in with Apple entitlement and provisioning profiles. The alternate-account broker is deployed at `https://soundbound-auth.l-leong1618.workers.dev`, using Services ID `app.soundbound.web`. Both app configurations point to its `/apple/start` URL. The health check and redirect to Apple pass. A device test has reported an incomplete web sign-in; alternate-account login is not yet verified end to end.
 
 `SoundboundAppleWebAuthURL` is set in both app Info.plists. Apple signing secrets are stored only in the auth Worker; no private key belongs in the app or repository.
 
@@ -34,6 +34,8 @@ Register the HTTPS domain and callback with the Services ID in Apple Developer. 
 ## Verification and session behavior
 
 The app supplies fresh state, nonce, and a PKCE challenge. The broker stores expiring flow state, exchanges the Apple authorization code, verifies Apple’s RS256 signature against Apple’s public keys, and checks issuer, audience, nonce, expiration, and issue time. It then returns a 60-second one-use redemption code. Atomic Durable Object storage prevents double redemption. The app redeems that code with its PKCE verifier over HTTPS.
+
+The app rejects callbacks with the wrong state or target, duplicate state/code fields, or both a code and an error. Known failure codes produce short diagnostic messages without exposing authorization codes, tokens, or raw server errors.
 
 Apple identity/access/refresh tokens are not persisted or returned to the app. The app retains the verified web profile only for the current run, for at most one hour. After relaunch, web sign-in must be repeated. Cached display metadata does not count as authentication. Native credential-state checks do not override web-account selection.
 

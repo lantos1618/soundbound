@@ -87,6 +87,7 @@ public struct LocalAudioDevice: Identifiable, Equatable, Codable {
     public var volume: Double?
     public var busy = false
     public var connection: AudioConnection?
+    public var physicalID: String?
     public var canMoveBetweenHosts: Bool { connection == .bluetooth }
     public var connectionLabel: String { connection?.rawValue ?? "Audio device" }
     public init(id: String, name: String, icon: String, detail: String, status: String) {

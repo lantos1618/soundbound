@@ -43,4 +43,4 @@ Incoming audio requests use a modal approval prompt. The sender keeps a visible 
 
 ## Trusted playback and input checks
 
-Paired devices automatically accept playback by default; Settings can restore per-request approval. Unpaired identities cannot send audio. Pairing does not activate a microphone. Local input icons record only while held, stop on release/cancellation or after 30 seconds, and keep the clip in memory. Red input indicators follow measured PCM level; green indicators mark actual test transmission/playback start. The room test remains a sequence of one-to-one streams, not a many-source mixer.
+Paired devices automatically accept playback. Unpaired identities cannot send audio. Pairing does not activate a microphone. Tap a local input icon to start recording and tap again to stop; recording also stops after 30 seconds and keeps the clip in memory. Remote microphone requests still require approval at the source. Red input indicators follow measured PCM level; green indicators mark actual test transmission/playback start. The room test remains a sequence of one-to-one streams, not a many-source mixer.

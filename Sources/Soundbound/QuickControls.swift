@@ -9,7 +9,7 @@ struct QuickControls: View {
     var openApp: () -> Void
     var quit: () -> Void
     @State private var selectedHeadphones = ""
-    private var headphones: [LocalAudioDevice] { audio.localAudioDevices.filter { $0.connection == .bluetooth && $0.hasOutput } }
+    private var headphones: [LocalAudioDevice] { AudioDeviceInventory.headphones(in: audio.localAudioDevices) }
     private var headphone: LocalAudioDevice? { headphones.first { $0.id == selectedHeadphones } ?? headphones.first }
     var body: some View {
         VStack(spacing: 0) {
@@ -22,8 +22,8 @@ struct QuickControls: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
                     destinationSection
-                    notificationsSection
                     applicationsSection
+                    notificationsSection
                 }.padding(16)
             }.frame(maxHeight: 580)
             Divider()
@@ -35,56 +35,45 @@ struct QuickControls: View {
         }.frame(width: 360).background(.regularMaterial)
     }
     private var destinationSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("Where to use your headphones").font(.subheadline.weight(.semibold))
+        VStack(alignment: .leading, spacing: 12) {
             if let headphone {
                 if headphones.count > 1 {
                     Picker("Headphones", selection: $selectedHeadphones) {
                         ForEach(headphones) { Text($0.name).tag($0.id) }
                     }.labelsHidden()
-                } else { Label(headphone.name, systemImage: "headphones") }
-                Text("Devices").font(.caption).foregroundStyle(.secondary).padding(.top, 4)
-                if let room = store.activeRoom {
-                    Label("Using room: " + room.name, systemImage: "square.grid.2x2").font(.caption)
-                    Button("Turn off room to choose a device") { store.setActiveRoom(nil) }.font(.caption)
-                }
+                } else { Label(headphone.name, systemImage: "headphones").font(.headline) }
+            } else {
+                Label(audio.headphoneName, systemImage: "headphones").font(.headline)
+                Text("Choose headphones in Soundbound to connect them.").font(.caption).foregroundStyle(.secondary)
+            }
+            Text("Listen on").font(.caption).foregroundStyle(.secondary)
+            Button {
+                guard let headphone else { return }
+                store.recordAudioIntent(.connect, id: headphone.id)
+                audio.perform(.connect, id: headphone.id)
+            } label: {
+                HStack {
+                    Label(store.name, systemImage: "laptopcomputer")
+                    Spacer()
+                    if headphone?.selectedOutput == true { Image(systemName: "checkmark") }
+                }.frame(maxWidth: .infinity, minHeight: 30, alignment: .leading).contentShape(Rectangle())
+            }.buttonStyle(.plain)
+                .disabled(headphone == nil || store.activeRoom != nil || audio.busy)
+            ForEach(store.friends) { peer in
                 Button {
-                    store.recordAudioIntent(.connect, id: headphone.id)
-                    audio.perform(.connect, id: headphone.id)
+                    guard let headphone else { return }
+                    store.requestDeviceMove(headphone, to: peer.id, from: store.name)
                 } label: {
                     HStack {
-                        Label(store.name, systemImage: "laptopcomputer")
+                        Label(peer.card.name, systemImage: peer.card.kind == "mac" ? "laptopcomputer" : "iphone")
                         Spacer()
-                        if headphone.selectedOutput { Image(systemName: "checkmark") }
-                    }
-                }.buttonStyle(.plain).padding(.vertical, 4).disabled(store.activeRoom != nil || audio.busy)
-                ForEach(store.friends) { peer in
-                    Button { store.requestDeviceMove(headphone, to: peer.id, from: store.name) } label: {
-                        HStack {
-                            Label(peer.card.name, systemImage: peer.card.kind == "mac" ? "laptopcomputer" : "iphone")
-                            Spacer()
-                            if !store.nearby.contains(where: { $0.id == peer.id }) { Text("Offline").font(.caption).foregroundStyle(.secondary) }
-                            else { Image(systemName: "arrow.right") }
-                        }
-                    }.buttonStyle(.plain).padding(.vertical, 4)
-                        .disabled(store.activeRoom != nil || !store.nearby.contains { $0.id == peer.id })
-                }
-                if let level = headphone.volume { HardwareVolumeRow(device: headphone, initialLevel: level, audio: audio) }
-            } else {
-                Text("No headphones found.").font(.caption).foregroundStyle(.secondary)
+                        if !store.nearby.contains(where: { $0.id == peer.id }) { Text("Offline").font(.caption).foregroundStyle(.secondary) }
+                        else { Image(systemName: "arrow.right") }
+                    }.frame(maxWidth: .infinity, minHeight: 30, alignment: .leading).contentShape(Rectangle())
+                }.buttonStyle(.plain)
+                    .disabled(headphone == nil || store.activeRoom != nil || !store.nearby.contains { $0.id == peer.id })
             }
-            if !store.rooms.isEmpty {
-                Text("Rooms").font(.caption).foregroundStyle(.secondary).padding(.top, 4)
-                ForEach(store.rooms) { room in
-                    Toggle(room.name, isOn: Binding(get: { store.activeRoomID == room.id }, set: { store.setActiveRoom($0 ? room.id : nil) }))
-                        .toggleStyle(.switch).controlSize(.small)
-                }
-            }
-        }
-    }
-    private var notificationsSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("Notifications").font(.subheadline.weight(.semibold))
+            if let headphone, let level = headphone.volume { HardwareVolumeRow(device: headphone, initialLevel: level, audio: audio) }
             if let move = store.outgoingDeviceMove {
                 HStack(alignment: .top) {
                     Label(move.message, systemImage: move.phase == .connected ? "checkmark.circle" : "arrow.left.arrow.right")
@@ -94,6 +83,18 @@ struct QuickControls: View {
                         .buttonStyle(.plain).accessibilityLabel("Dismiss move status")
                 }
             }
+            if !store.rooms.isEmpty {
+                Picker("Room", selection: Binding(get: { store.activeRoomID ?? "" }, set: { store.setActiveRoom($0.isEmpty ? nil : $0) })) {
+                    Text("Off — use selected device").tag("")
+                    ForEach(store.rooms) { room in Text(room.name).tag(room.id) }
+                }.font(.caption)
+            }
+        }
+        .onAppear { if selectedHeadphones.isEmpty { selectedHeadphones = headphones.first?.id ?? "" } }
+    }
+    private var notificationsSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Notifications").font(.subheadline.weight(.semibold))
             if let request = store.deviceMoveRequest {
                 requestRow("Move " + request.deviceName + " here?", detail: "From " + request.senderName,
                            allow: { store.decideDeviceMove(approve: true) }, decline: { store.decideDeviceMove(approve: false) })
@@ -107,7 +108,7 @@ struct QuickControls: View {
                 requestRow("Microphone request", detail: request.senderName + " wants to record this microphone",
                            allow: { store.decideRecordingRequest(allow: true) }, decline: { store.decideRecordingRequest(allow: false) })
             }
-            PlaybackRequests(mesh: store.mesh, hasOtherRequests: store.outgoingDeviceMove != nil || store.deviceMoveRequest != nil || !store.requests.isEmpty || store.recordingRequest != nil)
+            PlaybackRequests(mesh: store.mesh, hasOtherRequests: store.deviceMoveRequest != nil || !store.requests.isEmpty || store.recordingRequest != nil)
         }
     }
     private func requestRow(_ title: String, detail: String, allow: @escaping () -> Void, decline: @escaping () -> Void) -> some View {

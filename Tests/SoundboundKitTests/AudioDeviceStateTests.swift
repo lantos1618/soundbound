@@ -2,6 +2,15 @@ import XCTest
 @testable import SoundboundKit
 
 final class AudioDeviceStateTests: XCTestCase {
+    func testDisconnectedPairedHeadphonesRemainSelectable() {
+        var headphones = device("bluetooth:aa:bb:cc:dd:ee:ff", available: false)
+        headphones.connection = .bluetooth
+        headphones.canConnect = true
+        XCTAssertFalse(headphones.hasOutput)
+        var speaker = device("speaker")
+        speaker.connection = .builtIn; speaker.hasOutput = true
+        XCTAssertEqual(AudioDeviceInventory.headphones(in: [headphones, speaker]).map(\.id), [headphones.id])
+    }
     private func device(_ id: String, available: Bool = true) -> LocalAudioDevice {
         var result = LocalAudioDevice(id: id, name: "AirPods", icon: "headphones", detail: "Bluetooth", status: "Available")
         result.isAvailable = available

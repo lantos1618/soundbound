@@ -37,6 +37,11 @@ public struct AudioDeviceState: Equatable {
 }
 
 public enum AudioDeviceInventory {
+    /// Paired/disconnected headphones still need destination controls. Their
+    /// audio profiles often disappear while another host owns the connection.
+    public static func headphones(in devices: [LocalAudioDevice]) -> [LocalAudioDevice] {
+        reconcile(devices).filter { $0.connection == .bluetooth }
+    }
     /// Normalize only explicit Bluetooth addresses, never display names.
     public static func bluetoothIdentity(_ address: String) -> String? {
         let compact = address.lowercased().filter { $0 != ":" && $0 != "-" }

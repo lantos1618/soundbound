@@ -21,11 +21,27 @@ public struct SoundboundRootView: View {
         NavigationStack {
             HomeView(store: store, localAudioDevices: localAudioDevices, audioMessage: audioMessage,
                      onAudioAction: onAudioAction, onAudioVolume: onAudioVolume)
-                .toolbar {
-                    ToolbarItem(placement: .principal) { SoundboundBrand() }
-                    ToolbarItem(placement: .primaryAction) {
-                        Button { settings = true } label: { Label("Settings", systemImage: "gearshape") }
+                .safeAreaInset(edge: .top, spacing: 0) {
+                    ZStack {
+                        Text("Soundbound")
+                            .font(.headline)
+                            .accessibilityAddTraits(.isHeader)
+                        HStack {
+                            Spacer()
+                            Button { settings = true } label: {
+                                Image(systemName: "gearshape")
+                                    .font(.system(size: 20))
+                                    .frame(width: 44, height: 44)
+                                    .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("Settings")
+                        }
                     }
+                    .frame(maxWidth: .infinity)
+                    .padding(.horizontal, 20)
+                    .padding(.vertical, 8)
+                    .background(canvasColor)
                 }
         }
         #if os(macOS)
@@ -57,15 +73,6 @@ public struct SoundboundRootView: View {
         .alert("Soundbound", isPresented: Binding(get: { store.notice != nil }, set: { if !$0 { store.notice = nil } })) {
             Button("OK") { store.notice = nil }
         } message: { Text(store.notice ?? "") }
-    }
-}
-
-private struct SoundboundBrand: View {
-    var body: some View {
-        HStack(spacing: 8) {
-            Image("SoundboundMark", bundle: .main).resizable().scaledToFit().frame(width: 30, height: 24)
-            Text("Soundbound").font(.headline)
-        }.accessibilityElement(children: .combine)
     }
 }
 

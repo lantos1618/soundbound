@@ -39,18 +39,21 @@ A concrete first use case is:
 
 ## The engine model
 
-Soundbound has four main concepts:
+Soundbound separates identity, places, devices, and audio routes:
 
 | Concept | Meaning |
 | --- | --- |
-| Device | A paired Mac, iPhone, or other supported endpoint. |
+| Identity | A user or device recognized by a public signing key. |
+| Region | A user-defined place or collection of rooms, such as Home or Studio. It is not a cloud datacenter region. |
+| Room | A logical listening/sharing group with its own access policy. |
+| Device | A paired Mac, iPhone, or other supported endpoint; stationary or movable. |
 | Source | A specific audio producer: Mac system audio, a permitted app, a microphone, or media Soundbound itself plays. |
 | Destination | A playback device, a local mixer, or a virtual microphone exposed to another app. |
 | Route | An approved connection from one source to one or more destinations. |
 
 Several sources may feed one destination. One source may feed several destinations. Every route has its own permission, mute state, volume, connection state, and diagnostics.
 
-The engine is logically shared but need not be one central server carrying all sound. The control service manages membership and permissions; endpoint apps capture, encode, receive, mix, and play audio. A TURN relay forwards packets when used. It does not need to decode or mix them.
+The engine is logically shared but need not be one central server carrying all sound. Signed grants carry membership and permissions. An optional control service can distribute requests and presence without becoming the only source of authorization; endpoint apps capture, encode, receive, mix, and play audio. A TURN relay forwards packets when used. It does not need to decode or mix them.
 
 ```mermaid
 flowchart LR
@@ -66,6 +69,82 @@ flowchart LR
 ```
 
 An endpoint's source capabilities depend on its operating system. “iPhone source” does not mean an app can silently capture every other iPhone app, every call, or protected media.
+
+## Regions, rooms, friends, and movable devices
+
+Regions are user-defined places such as **Home**, **Office**, or **Studio**. Rooms are listening groups inside them, such as **Living room**, **Desk**, or **Kitchen**. These names organize people and audio; they do not select a cloud datacenter or imply location tracking.
+
+The menu bar and full app expose the same hierarchy:
+
+```text
+Devices
+  This Mac
+  My iPhone · movable
+Regions
+  Home
+    Living room · 2 speakers
+    Desk · 1 Mac
+  Studio
+    Main room · request to join
+Requests
+  Pending invitations and access requests
+```
+
+### Room access
+
+A room owner chooses a policy:
+
+- **Invite only:** no access without a signed invitation.
+- **Request to join:** a requester remains outside until an authorized owner or moderator approves.
+- **Allow friends:** established Soundbound friends may join under the room's declared role. Friendship means an explicitly accepted identity relationship, not somebody found in a contact list.
+
+Join permission, listening permission, publishing sound, sharing a microphone, moving room-owned devices, and adjusting shared speakers are separate capabilities. The default friend role can listen; it does not automatically publish a microphone or gain speaker controls. An owner may deliberately configure broader permissions.
+
+The UI says **Request access**, **Waiting for approval**, **Join**, or **Joined**, based on actual authorization state. A pending request must not obtain room keys or receive private audio packets. The owner can approve, decline, revoke, or remove a member.
+
+### Moving devices
+
+Mark a device as stationary or movable. A movable device can be assigned to another room using **Move to…** or by dragging it in the full app. A compact menu uses the same action without requiring a spatial editor.
+
+For the first version, each device has one active room. A move must be authorized by the device owner or someone explicitly granted that control. Revoke the old room's active routes before enabling the destination room's routes, obtain destination approval where required, and acknowledge the applied change before showing the device as moved. Moving an icon must never grant a previously unauthorized room access to its microphone.
+
+Physical movement and network changes do not automatically change room membership. Positioning devices in a layout is organization, not tracking their real-world location.
+
+### Speaker volume
+
+Show a volume control and mute for each available playback endpoint, plus a group control for speakers the user may control. Save endpoint gain separately from individual incoming-stream gain.
+
+On every platform, distinguish **Soundbound playback volume** from **system/hardware volume**. iOS allows control of our own playback gain but reserves system-volume changes to the user through system UI. Use supported hardware controls only where available; do not promise remote iPhone system-volume control. Show pending or failed changes honestly and apply gain ramps to avoid abrupt jumps.
+
+### Sign in with Apple
+
+Offer **Sign in with Apple** as optional onboarding or account recovery/synchronization, not as permission to access all of a person's Apple devices. Apple authentication identifies a person; the device still enrolls its own signing key and joins rooms explicitly. It does not expose an Apple friends list or bypass room permissions. A managed account-sync service would be optional infrastructure, not a requirement for local signed pairing.
+
+## Signed identities and serverless operation
+
+The default security root is a device signing key held in the platform keychain. Use a standard, reviewed signature scheme and protocol implementation, not custom cryptography. Exchange public keys through an explicit pairing ceremony such as a verified QR code. An owner identity may authorize additional device keys.
+
+Signed messages and grants include a protocol version, issuer, intended audience, room/source/destination identifiers, allowed actions, expiry, and a nonce or sequence number. Sign a canonical representation and reject altered messages, wrong audiences, expired grants, and replayed operations. Signatures authenticate instructions; they do not encrypt audio. Media still requires an authenticated encrypted transport.
+
+A room owner signs scoped invitations and grants. Devices validate those grants locally before sharing keys, sending media, or applying control changes. Room owners can delegate limited approval rights to moderators without distributing their private keys.
+
+### What does not require our own server
+
+- Pairing nearby devices with QR codes and local discovery.
+- Verifying signed invitations and control messages.
+- Enforcing cached, still-valid room permissions on devices.
+- Direct media connections when the peers are reachable.
+- Manual exchange of connection offers for remote direct sessions.
+
+### What signatures do not solve
+
+- **Discovery:** a signature cannot find an offline or unknown peer. Automatic remote rendezvous needs a reachable peer or an optional directory/signaling service. Manual offer exchange avoids that service at a usability cost.
+- **Connectivity:** signatures cannot bypass NAT or a firewall. Free STUN can assist direct discovery; TURN is still needed on networks where a direct path is impossible.
+- **Revocation while offline:** a disconnected peer cannot learn an immediate revocation. Use short-lived grants, signed revocation updates, and refreshed room keys. Sensitive room sessions fail closed when required permission state cannot be refreshed; do not claim globally instantaneous revocation without an online authority.
+- **Recovery:** losing every trusted private key loses that identity unless the owner has configured a recovery mechanism.
+- **Paid relay credentials:** a provider's account-level TURN key cannot be safely embedded in public apps. Optional managed TURN still needs an authorized credential issuer or another provider-supported delegation mechanism.
+
+The promise is **no self-managed application server required for the basic direct mode**, not that the internet needs no infrastructure. Public STUN is external infrastructure; optional signaling, account sync, and TURN can be hosted services. A user's always-on device may also act as a rendezvous peer, with clear availability limits.
 
 ## Two layers: network and sound
 
@@ -119,7 +198,7 @@ Proposed components:
 
 1. **Mac app:** audio capture, publishing, receiving, routing controls, and diagnostics.
 2. **iPhone app:** pairing, incoming audio playback, compatible mixing with local playback, and optional microphone publishing.
-3. **Control service:** authenticated pairing, device presence, route approval, and session negotiation. Short-lived TURN credential issuance is optional and remains disabled without an explicitly configured relay.
+3. **Control plane:** device-signed pairing and route grants, local discovery, and session negotiation. Remote signaling and account synchronization are optional services. Short-lived TURN credential issuance remains optional and disabled without an explicitly configured relay.
 4. **Optional TURN relay:** an explicitly enabled fallback. Cloudflare STUN can assist free direct discovery independently of activating its paid TURN service.
 5. **Media engine:** WebRTC-based encrypted audio tracks, with a codec configuration appropriate to music or voice. Opus is the initial codec candidate.
 
@@ -307,11 +386,14 @@ flowchart TD
 
 The everyday interface should be short:
 
-- **Devices:** online, reconnecting, or offline.
+- **Devices:** online, reconnecting, or offline; stationary or movable.
+- **Regions and rooms:** places, room membership, and allowed actions.
+- **Requests:** incoming invitations and pending join requests.
+- **Volume:** per-endpoint Soundbound gain and mute, with authorized group controls.
 - **Send audio:** choose source and approved destinations.
 - **Listen:** choose approved incoming streams.
 - **Mic:** off, muted, or sending to a named device.
-- **Setup:** pairing, permissions, outputs, network preferences, and diagnostics.
+- **Setup:** optional Apple sign-in, signed pairing, friends, permissions, outputs, network preferences, recovery, and diagnostics.
 
 Avoid an overloaded audio-routing dashboard for the first usable version. Detailed transport information can live behind a diagnostics control.
 
@@ -362,7 +444,7 @@ Do not present the existing Bluetooth utility as the completed permission-based 
 
 ### 1. Control plane and direct-connection proof
 
-Build device identities, pairing, route consent, and a direct two-device connection using free discovery paths. Send a generated test stream. Confirm that denial and revocation actually prevent media delivery and that no TURN credentials are obtained in free mode.
+Build signed device identities, QR pairing, room/source grants, replay protection, and a direct two-device connection using free discovery paths. Send a generated test stream. Confirm that denial and revocation actually prevent media delivery and that no TURN credentials are obtained in free mode.
 
 ### 2. Useful Mac-to-iPhone playback
 
@@ -391,6 +473,11 @@ Add clock synchronization, playout scheduling, drift correction, and multi-speak
 | Cost policy | Free mode never obtains TURN credentials or uses a paid relay. |
 | TURN, when enabled | Relay-only configuration and transport statistics show the test really used TURN. |
 | Omni mode | Every active group route has valid source and destination grants; new devices and microphones are not shared silently. |
+| Rooms and friends | A pending or declined join request never receives room media; friend access grants only the configured role. |
+| Device movement | Old room routes stop before destination routes begin; a move cannot bypass destination approval. |
+| Signed control | Tampered, replayed, expired, and wrong-audience messages are rejected. |
+| Revocation | Connected peers apply revocations; offline behavior follows documented grant expiry and fail-closed rules. |
+| Volume | Only authorized users can control an endpoint; iPhone app gain is not mislabeled as hardware volume. |
 | Permission | A rejected, expired, or revoked route stops or prevents audio packets reaching the recipient. |
 | Playback | Intended headset reproduces the test; an accepted API call alone is not a pass. |
 | Mixing | Local phone music and the incoming Mac stream are independently audible and controllable. |
@@ -419,3 +506,6 @@ Add clock synchronization, playout scheduling, drift correction, and multi-speak
 - [Cloudflare: TURN operation, free STUN, and reconnect considerations](https://developers.cloudflare.com/realtime/turn/faq/)
 - [RFC 8489: STUN](https://www.rfc-editor.org/rfc/rfc8489)
 - [RFC 8656: TURN](https://www.rfc-editor.org/rfc/rfc8656)
+
+- [Apple: Sign in with Apple authentication](https://developer.apple.com/documentation/signinwithapple/authenticating-users-with-sign-in-with-apple)
+- [Apple: iOS system volume limitations](https://developer.apple.com/documentation/avfaudio/avaudiosession/outputvolume)

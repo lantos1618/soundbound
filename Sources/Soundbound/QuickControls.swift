@@ -83,12 +83,6 @@ struct QuickControls: View {
                         .buttonStyle(.plain).accessibilityLabel("Dismiss move status")
                 }
             }
-            if !store.rooms.isEmpty {
-                Picker("Room", selection: Binding(get: { store.activeRoomID ?? "" }, set: { store.setActiveRoom($0.isEmpty ? nil : $0) })) {
-                    Text("Off — use selected device").tag("")
-                    ForEach(store.rooms) { room in Text(room.name).tag(room.id) }
-                }.font(.caption)
-            }
         }
         .onAppear { if selectedHeadphones.isEmpty { selectedHeadphones = headphones.first?.id ?? "" } }
     }

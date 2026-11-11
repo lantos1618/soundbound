@@ -9,11 +9,11 @@ The app heading is simply “Soundbound”. Devices remain rows on the plain bac
 - **Home:** devices first, then rooms, then friends and pairing requests. No sidebar.
 - **Settings:** a toolbar button.
 
-The Mac menu-bar panel puts headphone destinations and move status first, then application volumes for the current Mac, then incoming requests. Paired headphones remain selectable when disconnected; losing their active audio profile must not hide the connection controls. Mac and paired-device destination rows remain visible. A room selector can replace direct routing, with an Off option to return to device selection.
+The Mac menu-bar panel puts headphone destinations and move status first, then application volumes for the current Mac, then incoming requests. Paired headphones remain selectable when disconnected; losing their active audio profile must not hide the connection controls. Mac and paired-device destination rows remain visible. Room controls live only in the main app, reached through Open Soundbound.
 
 Incoming requests include headphone moves, pairing or room joining, microphone recording, and playback when approval is required. Approving a headphone move does not mark it connected: a matching observation from the target is required.
 
-Settings shows one Sign in with Apple button when signed out, or Sign out when signed in. There is no advanced account menu. Signing out clears the app session and makes sign-in available again; Apple still controls which accounts its native sheet offers.
+Settings labels the signed-out state and shows Sign in with Apple, or Sign out when signed in. Use another Apple Account opens web sign-in when configured, and remains available in either state. Progress and Cancel sign-in appear during authorization. Signing out clears the app session; Apple still controls which accounts its native sheet offers. Cancelling web account selection preserves the existing account.
 
 ## Home interactions
 

@@ -7,7 +7,7 @@ A native macOS and iOS app for managing audio devices and sharing sound with per
 ## What works
 
 - Discover local inputs, outputs, Bluetooth headphones, and nearby Soundbound devices.
-- Use the menu-bar panel for headphone destination and rooms, pending requests, and this Mac’s app volumes. System Audio Recording permission is required for application mixing on macOS 14.2+.
+- Use the menu-bar panel for headphone destination, pending requests, and this Mac’s app volumes. Manage rooms in the main app. System Audio Recording permission is required for application mixing on macOS 14.2+.
 - Keep devices in several rooms and activate one room at a time on each host; turning a room off keeps its membership. Room activation does not yet create a synchronized multi-device mix.
 - Select the Mac’s output or microphone and adjust supported hardware volume.
 - Pair devices using a compact nearby QR code card, an inline iPhone camera scanner, short codes, nearby discovery, and explicit approval.

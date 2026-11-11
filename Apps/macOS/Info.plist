@@ -7,8 +7,8 @@
 <key>CFBundleExecutable</key><string>$(EXECUTABLE_NAME)</string>
 <key>CFBundleName</key><string>$(PRODUCT_NAME)</string>
 <key>CFBundlePackageType</key><string>APPL</string>
-<key>CFBundleShortVersionString</key><string>0.2.0</string>
-<key>CFBundleVersion</key><string>2</string>
+<key>CFBundleShortVersionString</key><string>$(MARKETING_VERSION)</string>
+<key>CFBundleVersion</key><string>$(CURRENT_PROJECT_VERSION)</string>
 <key>NSLocalNetworkUsageDescription</key><string>Find nearby Soundbound devices and request pairing when you turn on Discover.</string>
 <key>NSBonjourServices</key><array><string>_soundbound._tcp</string></array>
 <key>NSMicrophoneUsageDescription</key><string>Share your microphone with a paired device only after you tap Share microphone and it approves playback.</string>

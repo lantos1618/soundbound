@@ -67,7 +67,9 @@ struct SoundboundMobileApp: App {
         WindowGroup {
             SoundboundRootView(store: store, localAudioDevices: audio.devices, audioMessage: audio.message, onAudioAction: { audio.perform($0, id: $1) })
                 .onAppear { audio.onTestStarted = { store.activity.chirp($0); store.activity.chirp(store.deviceID) } }
-                .onOpenURL { store.join(codeOrLink: $0.absoluteString) }
+                .onOpenURL { url in
+                    if url.host != "auth" { store.join(codeOrLink: url.absoluteString) }
+                }
         }
     }
 }

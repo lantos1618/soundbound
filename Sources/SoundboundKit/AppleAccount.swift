@@ -10,13 +10,18 @@ import AppKit
 
 /// Apple authorization for this installation. Cached profile data never grants
 /// room permissions, and identity/access tokens are not persisted by the app.
-public final class AppleAccount: NSObject, ObservableObject, ASAuthorizationControllerDelegate, ASAuthorizationControllerPresentationContextProviding {
+public final class AppleAccount: NSObject, ObservableObject, ASAuthorizationControllerDelegate, ASAuthorizationControllerPresentationContextProviding, ASWebAuthenticationPresentationContextProviding {
     public static let shared = AppleAccount()
     @Published public private(set) var displayName: String?
     @Published public private(set) var email: String?
     @Published public private(set) var isSignedIn = false
     @Published public private(set) var isBusy = false
     @Published public private(set) var message: String?
+    private var generation = UUID()
+    private var webSession: ASWebAuthenticationSession?
+    private var webExchange: URLSessionDataTask?
+    private var verifiedWebUser: String?
+    private var webVerifiedUntil: Date?
     private var expectedState: String?
     private var authorizationController: ASAuthorizationController?
     private var authorizationWindow: ASPresentationAnchor?
@@ -29,9 +34,16 @@ public final class AppleAccount: NSObject, ObservableObject, ASAuthorizationCont
         var user: String
         var name: String?
         var email: String?
+        var method: String?
     }
     public var isConfigured: Bool {
         Bundle.main.object(forInfoDictionaryKey: "SoundboundAppleSignInConfigured") as? Bool == true
+    }
+    public var isWebConfigured: Bool { webAuthURL != nil }
+    private var webAuthURL: URL? {
+        guard let text = Bundle.main.object(forInfoDictionaryKey: "SoundboundAppleWebAuthURL") as? String,
+              let url = URL(string: text), url.scheme == "https", url.host != nil else { return nil }
+        return url
     }
     public init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
@@ -96,6 +108,7 @@ public final class AppleAccount: NSObject, ObservableObject, ASAuthorizationCont
         authorizationController = nil; authorizationWindow = nil
     }
     public func prepare(_ request: ASAuthorizationAppleIDRequest) {
+        generation = UUID()
         let state = UUID().uuidString
         expectedState = state
         request.state = state
@@ -118,7 +131,7 @@ public final class AppleAccount: NSObject, ObservableObject, ASAuthorizationCont
             let old = profile.flatMap { $0.user == credential.user ? $0 : nil }
             let formatted = credential.fullName.map { PersonNameComponentsFormatter().string(from: $0) }
             let name = formatted.flatMap { $0.isEmpty ? nil : $0 } ?? old?.name
-            let fresh = Profile(user: credential.user, name: name, email: credential.email ?? old?.email)
+            let fresh = Profile(user: credential.user, name: name, email: credential.email ?? old?.email, method: "native")
             // This is display metadata, not a stored bearer credential.
             if let data = try? JSONEncoder().encode(fresh) { defaults.set(data, forKey: Self.profileKey) }
             displayName = fresh.name; email = fresh.email
@@ -131,10 +144,17 @@ public final class AppleAccount: NSObject, ObservableObject, ASAuthorizationCont
         }
     }
     public func refreshCredential() {
-        guard isConfigured, let profile else { return }
+        guard !isBusy, let profile else { return }
+        if profile.method == "web" {
+            isSignedIn = verifiedWebUser == profile.user && (webVerifiedUntil ?? .distantPast) > Date()
+            return
+        }
+        guard isConfigured else { return }
+        let requestedGeneration = generation
         ASAuthorizationAppleIDProvider().getCredentialState(forUserID: profile.user) { [weak self] state, error in
             DispatchQueue.main.async {
-                guard let self else { return }
+                guard let self, self.generation == requestedGeneration,
+                      self.profile?.user == profile.user, self.profile?.method != "web" else { return }
                 if state == .authorized {
                     self.displayName = profile.name; self.email = profile.email; self.isSignedIn = true
                 } else if error == nil {
@@ -146,13 +166,115 @@ public final class AppleAccount: NSObject, ObservableObject, ASAuthorizationCont
             }
         }
     }
-    public func signOut() {
+    public func cancelSignIn() {
+        generation = UUID()
         let pending = authorizationController
         clearAuthorization()
         pending?.cancel()
+        webSession?.cancel(); webSession = nil
+        webExchange?.cancel(); webExchange = nil
+        expectedState = nil; isBusy = false
+        message = nil
+    }
+    public func signOut() {
+        cancelSignIn()
+        verifiedWebUser = nil; webVerifiedUntil = nil
         defaults.removeObject(forKey: Self.profileKey)
         displayName = nil; email = nil; isSignedIn = false; isBusy = false; expectedState = nil; message = nil
     }
+    public func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {
+        authorizationWindow ?? ASPresentationAnchor()
+    }
+    public func useAnotherAccount() {
+        guard !isBusy else { return }
+        guard let startURL = webAuthURL, let window = currentWindow else {
+            message = "Switching accounts needs the configured Apple web sign-in service."
+            return
+        }
+        signOut()
+        let attempt = UUID(); generation = attempt
+        let state = Self.randomURLToken()
+        let verifier = Self.randomURLToken()
+        let nonce = Self.randomURLToken()
+        let challenge = Data(SHA256.hash(data: Data(verifier.utf8))).base64URLEncoded
+        expectedState = state; authorizationWindow = window; isBusy = true
+        var components = URLComponents(url: startURL, resolvingAgainstBaseURL: false)!
+        components.queryItems = [URLQueryItem(name: "state", value: state),
+                                 URLQueryItem(name: "code_challenge", value: challenge),
+                                 URLQueryItem(name: "nonce", value: nonce)]
+        let session = ASWebAuthenticationSession(url: components.url!, callbackURLScheme: "soundbound") { [weak self] url, error in
+            DispatchQueue.main.async {
+                guard let self, self.generation == attempt, self.isBusy else { return }
+                self.webSession = nil
+                guard error == nil, let url, let callback = URLComponents(url: url, resolvingAgainstBaseURL: false),
+                      callback.scheme == "soundbound", callback.host == "auth",
+                      callback.queryItems?.first(where: { $0.name == "state" })?.value == state,
+                      let code = callback.queryItems?.first(where: { $0.name == "code" })?.value else {
+                    self.cancelSignIn()
+                    if error == nil { self.message = "Apple sign-in wasn’t completed. Try again." }
+                    return
+                }
+                self.redeem(code: code, verifier: verifier, startURL: startURL, attempt: attempt)
+            }
+        }
+        session.presentationContextProvider = self
+        session.prefersEphemeralWebBrowserSession = true
+        webSession = session
+        if !session.start() {
+            cancelSignIn(); message = "Apple’s sign-in window could not open. Please try again."
+        }
+    }
+    private var currentWindow: ASPresentationAnchor? {
+        #if os(iOS)
+        return UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.flatMap(\.windows).first { $0.isKeyWindow }
+        #else
+        return NSApp.keyWindow ?? NSApp.mainWindow
+        #endif
+    }
+    private struct WebProfile: Decodable {
+        var provider: String
+        var subject: String
+        var name: String?
+        var email: String?
+        var expiresAt: TimeInterval
+    }
+    private func redeem(code: String, verifier: String, startURL: URL, attempt: UUID) {
+        let endpoint = startURL.deletingLastPathComponent().appendingPathComponent("redeem")
+        var request = URLRequest(url: endpoint)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 25
+        request.httpShouldHandleCookies = false
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try? JSONEncoder().encode(["code": code, "code_verifier": verifier])
+        let session = URLSession(configuration: .ephemeral, delegate: AppleAuthNoRedirect(), delegateQueue: nil)
+        let task = session.dataTask(with: request) { [weak self] data, response, error in
+            session.finishTasksAndInvalidate()
+            DispatchQueue.main.async {
+                guard let self, self.generation == attempt, self.isBusy else { return }
+                self.webExchange = nil; self.authorizationWindow = nil; self.isBusy = false; self.expectedState = nil
+                guard error == nil, let response = response as? HTTPURLResponse, response.statusCode == 200,
+                      let data, data.count < 16_384, let result = try? JSONDecoder().decode(WebProfile.self, from: data),
+                      result.provider == "apple", !result.subject.isEmpty, result.subject.count < 256,
+                      result.expiresAt > Date().timeIntervalSince1970 else {
+                    self.message = "Apple account verification failed. Please try again."
+                    return
+                }
+                let profile = Profile(user: result.subject, name: result.name, email: result.email, method: "web")
+                if let encoded = try? JSONEncoder().encode(profile) { self.defaults.set(encoded, forKey: Self.profileKey) }
+                self.verifiedWebUser = result.subject
+                self.webVerifiedUntil = Date(timeIntervalSince1970: min(result.expiresAt, Date().addingTimeInterval(3600).timeIntervalSince1970))
+                self.displayName = result.name; self.email = result.email; self.isSignedIn = true
+                self.message = nil
+            }
+        }
+        webExchange = task; task.resume()
+    }
+    private static func randomURLToken() -> String {
+        var bytes = [UInt8](repeating: 0, count: 32)
+        precondition(SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes) == errSecSuccess)
+        return Data(bytes).base64URLEncoded
+    }
+
 }
 
 public struct AppleAccountView: View {
@@ -174,6 +296,16 @@ public struct AppleAccountView: View {
                     .disabled(account.isBusy || !account.isConfigured)
                 if !account.isConfigured {
                     Text("Apple sign-in needs the signed development build.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            if account.isBusy {
+                Button("Cancel sign-in") { account.cancelSignIn() }.buttonStyle(.bordered)
+            } else {
+                Button("Use another Apple Account") { account.useAnotherAccount() }
+                    .buttonStyle(.plain).disabled(!account.isWebConfigured)
+                if !account.isWebConfigured {
+                    Text("Account switching is waiting for the Apple web sign-in service.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
             }
@@ -214,3 +346,13 @@ private struct AppleAuthorizationButton: NSViewRepresentable {
     func updateNSView(_ button: ASAuthorizationAppleIDButton, context: Context) { button.isEnabled = context.environment.isEnabled }
 }
 #endif
+
+private extension Data {
+    var base64URLEncoded: String { base64EncodedString().replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: "=", with: "") }
+}
+private final class AppleAuthNoRedirect: NSObject, URLSessionTaskDelegate {
+    func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
+                    newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) {
+        completionHandler(nil)
+    }
+}

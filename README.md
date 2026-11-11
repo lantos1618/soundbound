@@ -19,6 +19,10 @@ A native macOS and iOS app for managing audio devices and sharing sound with per
 - Tap a device icon for a short test tone; green shows playback, amber shows a pending request. Hold an input icon to record in red with a live level indicator.
 - Tap a room name to test its available outputs in sequence. Paired devices play automatically unless that setting is turned off.
 
+Both apps use the version and build number in `VERSION`, shown at the bottom of Settings.
+
+Right-click a room heading or open its gear menu to delete a room. Deletion keeps paired devices intact.
+
 ## Try audio sharing
 
 1. Open Soundbound on both devices and enable Discover. A shared Wi-Fi network is the simplest setup; Apple peer-to-peer discovery is also enabled.

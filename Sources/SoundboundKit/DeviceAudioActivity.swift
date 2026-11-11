@@ -15,6 +15,10 @@ public final class DeviceAudioActivity: ObservableObject {
     private var held = false
     private var playbackTimer: DispatchSourceTimer?
     public init() {}
+    public func showRecordingHint(_ id: String) {
+        messageID = id
+        message = "Hold the microphone icon to record. Release to stop, then choose Replay."
+    }
     public func waiting(_ id: String) { modes[id] = .waiting }
     public func clearWaiting() {
         for id in Array(modes.keys) where modes[id] == .waiting { modes[id] = nil }

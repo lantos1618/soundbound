@@ -1,11 +1,42 @@
-# Sign in with Apple
+# Apple sign-in
 
-Signed development builds support native Apple authorization on macOS and iOS. Successful sign-in has been confirmed on both devices. No app-specific password is required.
+Soundbound has two distinct sign-in paths:
 
-`bash scripts/build.sh` builds the provisioned Mac app. Open the iOS Xcode project to run it on a phone. Both targets require the Sign in with Apple capability and a valid development team/profile. `SOUNDBOUND_SIGNED=0` makes an offline ad-hoc Mac build with Apple login disabled.
+- **Sign in with Apple** uses the device’s native Apple authorization sheet. It is tied to the Apple Account available to the OS.
+- **Use another Apple Account** opens an ephemeral web authorization session. It does not sign the Mac out of iCloud or change its Apple Account.
 
-The app retains its authorization controller and presents from the active Settings window. It checks request state, observes credential revocation, and checks the saved user identifier with Apple when returning to the app. Only display metadata is cached; authorization and identity tokens are not persisted.
+Signing out cancels pending authorization, clears Soundbound’s cached profile, and invalidates outstanding credential checks. A late check cannot sign the app back in.
 
-This is local account sign-in. It does not grant permissions to rooms on another device. Account-wide friendships and shared ownership require a server that verifies Apple tokens and maps accounts to device keys. Until then, paired-device approval and the creating device's room permissions remain authoritative.
+## Current setup
 
-Apple may omit name and email on repeat authorization. The app preserves previously received details and otherwise shows “Signed in with Apple”; it does not copy an unverified nearby device profile.
+Native iOS and macOS development builds have the Sign in with Apple entitlement and provisioning profiles. The alternate-account path requires a deployed broker and a registered Services ID before its button is enabled. Do not claim account switching is available merely because the client code compiles.
+
+Set `SoundboundAppleWebAuthURL` in each app’s Info.plist to the broker’s HTTPS `/apple/start` URL only after the service is configured. No Apple private key belongs in the app.
+
+## Broker configuration
+
+`server/apple-auth.mjs` is a separate Worker/Durable Object module. It does not enable or issue TURN credentials.
+
+Required bindings and secrets:
+
+- `APPLE_AUTH`: Durable Object namespace for `AppleAuthBroker`.
+- `APPLE_SERVICE_ID`: Apple Services ID, grouped with the intended primary App ID.
+- `APPLE_TEAM_ID` and `APPLE_KEY_ID`.
+- `APPLE_PRIVATE_KEY`: Sign in with Apple `.p8` key, stored only as a Worker secret.
+- `APPLE_AUTH_CALLBACK_URL`: exact registered HTTPS URL ending in `/apple/callback`.
+
+Register the HTTPS domain and callback with the Services ID in Apple Developer. Group native App IDs and Services ID deliberately if they must share Apple subject identifiers; equal display names or email addresses are not account identity proof.
+
+## Verification and session behavior
+
+The app supplies fresh state, nonce, and a PKCE challenge. The broker stores expiring flow state, exchanges the Apple authorization code, verifies Apple’s RS256 signature against Apple’s public keys, and checks issuer, audience, nonce, expiration, and issue time. It then returns a 60-second one-use redemption code. Atomic Durable Object storage prevents double redemption. The app redeems that code with its PKCE verifier over HTTPS.
+
+Apple identity/access/refresh tokens are not persisted or returned to the app. The app retains the verified web profile only for the current run, for at most one hour. After relaunch, web sign-in must be repeated. Cached display metadata does not count as authentication. Native credential-state checks do not override web-account selection.
+
+This broker verifies sign-in; it does not yet create account-level room grants or a public friend directory. Those require server-enforced authorization. Native sign-in by itself must not transfer room ownership.
+
+The broker caps new flows at 1,000/day for this prototype and expires state. That is an availability/abuse control, not a Cloudflare billing cap. Hosting needs its own deployment and cost review.
+
+## Tests
+
+`server/apple-auth.test.mjs` covers signature and claim validation, ES256 client-secret generation, disabled configuration, state/PKCE binding, atomic one-use redemption, callback replay, and rejection before an unrecognized state can contact Apple.

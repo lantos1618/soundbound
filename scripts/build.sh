@@ -9,10 +9,10 @@ if [[ "${SOUNDBOUND_SIGNED:-1}" == "1" ]]; then
   python3 scripts/generate-ios-project.py
   CONFIGURATION=Debug
   if [[ "${SOUNDBOUND_PRODUCTION:-0}" == "1" ]]; then CONFIGURATION=Release; fi
-  xcodebuild -project Apps/macOS/Soundbound.xcodeproj -scheme Soundbound \
-    -configuration "$CONFIGURATION" -destination 'platform=macOS' \
+  xcodebuild -project Apps/macOS/Soundbound.xcodeproj -scheme SoundboundApp \
+    -configuration "$CONFIGURATION" -destination 'platform=macOS,arch=arm64' \
     -derivedDataPath .build/mac-signed -allowProvisioningUpdates \
-    DEVELOPMENT_TEAM="${SOUNDBOUND_DEVELOPMENT_TEAM:-3QX8AT4S7W}" build
+    DEVELOPMENT_TEAM="${SOUNDBOUND_DEVELOPMENT_TEAM:-3QX8AT4S7W}" ONLY_ACTIVE_ARCH=YES build
   mkdir -p dist
   ditto ".build/mac-signed/Build/Products/$CONFIGURATION/Soundbound.app" dist/Soundbound.app
   printf 'Built signed %s\n' "$PWD/dist/Soundbound.app"

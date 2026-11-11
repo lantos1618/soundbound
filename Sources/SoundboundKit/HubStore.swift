@@ -5,6 +5,11 @@ import UIKit
 #endif
 
 public final class HubStore: ObservableObject {
+    public static var appBuildLabel: String {
+        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "Development"
+        let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "Local"
+        return version + " (" + build + ")"
+    }
     @Published public var name: String
     @Published public internal(set) var rooms: [AudioRoom]
     @Published public private(set) var friends: [KnownPeer]

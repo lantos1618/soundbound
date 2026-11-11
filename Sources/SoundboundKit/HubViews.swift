@@ -169,7 +169,7 @@ private struct HomeAudioStatus: View {
         if let message = activity.message { return message }
         if mesh.status != "No audio shared" { return mesh.status }
         if !roomTest.status.isEmpty { return roomTest.status }
-        return "Tap a speaker to test · hold a microphone to record"
+        return ""
     }
     var body: some View {
         HStack(spacing: 12) {
@@ -336,6 +336,7 @@ private struct LocalAudioRow: View {
                 AudioDeviceGlyph(activity: store.activity, id: device.id, symbol: device.icon, name: device.name,
                     input: device.hasInput ? device : nil, enabled: device.isAvailable && !device.busy && !store.mesh.active) {
                     if device.hasOutput { action(.testOutput, device.id) }
+                    else { store.activity.showRecordingHint(device.id) }
                 }
                 DeviceRowText(name: device.name,
                     detail: device.connectionLabel + " · " + (device.hasInput && device.hasOutput ? "Input & output" : device.hasInput ? "Microphone" : "Speaker"),
@@ -348,7 +349,7 @@ private struct LocalAudioRow: View {
                     .help("Settings for \(device.name)")
                     .accessibilityLabel("Settings for \(device.name)")
 
-            }.modifier(DeviceDragArea(id: "audio:" + device.id, name: device.name))
+            }
             if device.volume != nil {
                 HStack(spacing: 10) {
                     Text("Volume").font(.caption).foregroundStyle(.secondary)
@@ -484,12 +485,12 @@ private struct HomeDeviceRow: View {
                 enabled: testAction != nil) { testAction?() }
             DeviceRowText(name: name, detail: owner, activity: activity, id: activityID,
                           status: isLocal ? "This device" : (nearby ? "Nearby" : "Offline"))
+                .modifier(DeviceDragArea(id: dragID, name: name))
             if let settingsAction {
                 Button(action: settingsAction) { Image(systemName: "gearshape").frame(width: 24, height: 24) }
                     .buttonStyle(.plain).help("Settings for \(name)").accessibilityLabel("Settings for \(name)")
             } else { Color.clear.frame(width: 24, height: 24) }
         }.padding(.vertical, 10)
-            .modifier(DeviceDragArea(id: dragID, name: name))
     }
 }
 
@@ -504,6 +505,7 @@ private struct HomeView: View {
     @State private var adding = false
     @State private var roomSettings: AudioRoom?
     @State private var deletingRoom: AudioRoom?
+    @State private var showingDeleteConfirmation = false
     @StateObject private var roomTest = RoomPlaybackTest()
     @State private var hoveredRoom: String?
     @State private var overDevices = false
@@ -591,6 +593,14 @@ private struct HomeView: View {
                                     .buttonStyle(.plain).disabled(room.owner != store.deviceID)
                                     .help(room.owner == store.deviceID ? "Room settings" : "Edit this room on the device that created it")
                             }
+                            .contentShape(Rectangle())
+                            .contextMenu {
+                                Button("Room settings") { roomSettings = room }.disabled(room.owner != store.deviceID)
+                                Button("Delete room", role: .destructive) {
+                                    deletingRoom = room
+                                    showingDeleteConfirmation = true
+                                }.disabled(room.owner != store.deviceID)
+                            }
                             Divider()
                             VStack(spacing: 0) {
                                 if store.deviceRooms.contains(room.id) { roomDeviceRow(stacked: false) }
@@ -626,7 +636,10 @@ private struct HomeView: View {
                         }.padding(18).frame(maxWidth: .infinity, alignment: .leading)
                             .contextMenu {
                                 Button("Room settings") { roomSettings = room }.disabled(room.owner != store.deviceID)
-                                Button("Delete room", role: .destructive) { deletingRoom = room }.disabled(room.owner != store.deviceID)
+                                Button("Delete room", role: .destructive) {
+                                    deletingRoom = room
+                                    showingDeleteConfirmation = true
+                                }.disabled(room.owner != store.deviceID)
                             }
                             .overlay(dropOutline(active: hoveredRoom == room.id))
                             .contentShape(Rectangle())
@@ -660,7 +673,7 @@ private struct HomeView: View {
         }
         .sheet(isPresented: $adding) { NewRoomView(store: store) }
         .sheet(isPresented: $addingFriend) { AddFriendView(store: store) }
-        .confirmationDialog("Delete room?", isPresented: Binding(get: { deletingRoom != nil }, set: { if !$0 { deletingRoom = nil } }), titleVisibility: .visible) {
+        .alert("Delete room?", isPresented: $showingDeleteConfirmation) {
             Button("Delete room", role: .destructive) {
                 if let room = deletingRoom { store.deleteRoom(room.id) }
                 deletingRoom = nil
@@ -763,11 +776,11 @@ private struct HomeView: View {
             DeviceRowText(name: component.name,
                 detail: component.connectionLabel + " · " + (component.hasInput && component.hasOutput ? "Input & output" : component.hasInput ? "Microphone" : "Speaker"),
                 activity: store.activity, id: id,
-                status: component.selectedOutput || component.selectedInput ? "In use" : component.isAvailable ? "Available" : "Not connected")
+                status: component.hasInput && !component.hasOutput ? "Record on " + peer.card.name : component.selectedOutput || component.selectedInput ? "In use" : component.isAvailable ? "Available" : "Not connected")
+                .modifier(DeviceDragArea(id: id, name: component.name))
             Color.clear.frame(width: 24, height: 24)
         }
         .padding(.vertical, 10)
-        .modifier(DeviceDragArea(id: id, name: component.name))
         .contextMenu {
             ForEach(store.rooms) { room in
                 Button("Add to \(room.name)") { store.moveAudioDevice(id, to: room.id) }
@@ -922,6 +935,8 @@ private struct DetailSection<Content: View>: View {
 private struct RoomView: View {
     @ObservedObject var store: HubStore
     let roomID: String
+    @Environment(\.dismiss) private var dismiss
+    @State private var confirmingDeletion = false
     var room: AudioRoom? { store.rooms.first { $0.id == roomID } }
     var body: some View {
         DetailPage(title: room?.name ?? "Room", subtitle: room?.region ?? "") {
@@ -960,6 +975,26 @@ private struct RoomView: View {
                 }
             }
         }.navigationTitle("Room")
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            if room?.owner == store.deviceID {
+                HStack {
+                    Button("Delete room", role: .destructive) { confirmingDeletion = true }
+                        .buttonStyle(.bordered)
+                    Spacer()
+                }
+                .padding(20)
+                .background(.regularMaterial)
+            }
+        }
+        .alert("Delete room?", isPresented: $confirmingDeletion) {
+            Button("Delete room", role: .destructive) {
+                store.deleteRoom(roomID)
+                dismiss()
+            }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text("The devices stay paired. Only this room and its grouping are removed.")
+        }
     }
 }
 
@@ -1185,6 +1220,8 @@ private struct SettingsView: View {
                 Text("Your name is visible on this local network while discovery is on. You still approve every pairing request.")
                     .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
+            Text("Build " + HubStore.appBuildLabel).font(.caption2).foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .center)
         }.navigationTitle("Settings")
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)

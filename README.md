@@ -34,7 +34,7 @@ A concrete first use case is:
 - **No optimistic success.** “Requested,” “connecting,” “receiving,” and “verified” are different states.
 - **Quiet by default.** A small device list, clear routing actions, and restrained notifications.
 - **Stop means stop.** Stop capture, stop sending packets, and release microphone access.
-- **Local when possible, relayed when necessary.** Start with TURN for the first working version, then add automatic path optimization.
+- **Free direct connections first.** Use local networking and free STUN-assisted discovery before any separately enabled paid relay.
 - **No recording by default.** Live audio is transient; recording would require a separate explicit feature and permission.
 
 ## The engine model
@@ -67,21 +67,65 @@ flowchart LR
 
 An endpoint's source capabilities depend on its operating system. “iPhone source” does not mean an app can silently capture every other iPhone app, every call, or protected media.
 
-## First release: TURN-first
+## Two layers: network and sound
 
-The first transport milestone is a real TURN-relayed audio path between a Mac and an iPhone. Do not make direct networking, Bluetooth networking, a full mesh, or seamless roaming prerequisites for proving this path.
+The public model is:
+
+```text
+Network = available links + discovery + secure transport + route policy
+Sound   = sources + destinations + permissions + mixing
+```
+
+These are separate concerns. A better network path must never create a new permission to capture a microphone, hear a stream, or add a recipient.
+
+| Layer | Parts | Responsibility |
+| --- | --- | --- |
+| Link or bearer | Wi-Fi, Ethernet, cellular, a supported local link | Carry network packets. |
+| Optional tunnel | An existing IP tunnel, including a TUN-backed network | Offer another reachable path; Soundbound does not require or silently create a VPN. |
+| Discovery | Local discovery and STUN/ICE | Find candidate ways to connect. STUN does not carry the audio stream. |
+| Media transport | WebRTC over a selected direct or TURN-relayed path | Encrypt and transport audio with congestion and loss handling. |
+| Local audio | Bluetooth headsets, built-in mic/speaker, wired devices, supported media players | Supply or reproduce audio at an endpoint; Bluetooth is not assumed to be a general peer-to-peer IP link. |
+| Sound policy | Source and destination grants, gain, mute, subscriptions, optional recording | Decide which sound is allowed to flow and where. |
+
+The engine chooses among usable network paths using measured latency, jitter, loss, and stability. It does not treat “Wi-Fi,” “STUN,” and “WebRTC” as interchangeable alternatives: a WebRTC session can run over Wi-Fi, use STUN to discover a direct path, and use TURN when relaying is permitted.
+
+### Permission mode and omni mode
+
+- **Permission mode:** create specific approved routes, such as one microphone to one call app or one Mac's sound to two phones.
+- **Omni mode:** within an explicitly selected group, distribute all approved shared sources to all approved listening destinations. It is a convenience for creating a route matrix, not permission to listen to every nearby device.
+- Each group member must accept participation and any source sharing. A device may listen without publishing a microphone.
+- New members, newly added sources, and recording require their own applicable approval; they do not inherit blanket access by entering the group.
+- Muting, leaving, or revoking a grant removes the corresponding routes. Apply mixing/feedback rules so a stream is not recaptured and sent around a loop.
+- Turning on omni mode does not turn on paid relaying. Network spending permission remains separate from audio-sharing permission.
+
+```mermaid
+flowchart TD
+    SRC[Mic, app audio, media player] --> GRANT{Approved source and recipients?}
+    GRANT -->|No| STOP[No audio sent]
+    GRANT -->|Yes| MODE{Routing mode}
+    MODE -->|Permission| ROUTES[Selected approved routes]
+    MODE -->|Omni| GROUP[Approved group route matrix]
+    ROUTES --> ENGINE[Sound engine]
+    GROUP --> ENGINE
+    ENGINE --> NET[Choose best permitted network path]
+    NET --> OUT[Approved speakers, headphones, or virtual inputs]
+```
+
+## First release: free direct connections
+
+The first transport milestone is a working direct audio path between a Mac and an iPhone, using local discovery and free STUN where useful. No paid TURN service is activated by default. When networks prevent a direct connection, report that clearly; never silently enable billable relaying.
 
 Proposed components:
 
 1. **Mac app:** audio capture, publishing, receiving, routing controls, and diagnostics.
 2. **iPhone app:** pairing, incoming audio playback, compatible mixing with local playback, and optional microphone publishing.
-3. **Control service:** authenticated pairing, device presence, route approval, session negotiation, and short-lived TURN credential issuance.
-4. **Cloudflare TURN:** packet relay for the initial media path.
+3. **Control service:** authenticated pairing, device presence, route approval, and session negotiation. Short-lived TURN credential issuance is optional and remains disabled without an explicitly configured relay.
+4. **Optional TURN relay:** an explicitly enabled fallback. Cloudflare STUN can assist free direct discovery independently of activating its paid TURN service.
 5. **Media engine:** WebRTC-based encrypted audio tracks, with a codec configuration appropriate to music or voice. Opus is the initial codec candidate.
 
 Use a mature WebRTC implementation rather than inventing a new secure media transport. Verify the chosen native library supports injecting captured Mac audio, receiving media without taking over the iPhone audio session as a phone call, and keeping local music mixable.
 
-In TURN-first mode, explicitly force relay candidates so a successful test really exercises TURN rather than accidentally passing over the LAN.
+Default to direct-only connectivity and supply no TURN credentials. If a user separately enables a paid relay, test it using forced-relay mode so transport statistics demonstrate that the test really exercised TURN. Free mode must never obtain billable TURN credentials.
 
 ```mermaid
 flowchart TB
@@ -97,7 +141,7 @@ flowchart TB
         PAIR --> AUTH
     end
     subgraph Network
-        TURN[Cloudflare TURN relay]
+        TURN[Direct connection or explicitly enabled TURN relay]
     end
     subgraph iPhone
         REC[Soundbound audio receiver] --> MIX[Local playback mix]
@@ -121,7 +165,7 @@ flowchart TB
 ### STUN, TURN, Bluetooth, and TUN are different
 
 - **STUN** helps discover reachable addresses. It is not an audio relay.
-- **TURN** relays the media packets when selected. The first release uses it deliberately.
+- **TURN** relays media packets when selected and explicitly permitted. Paid TURN is off by default.
 - **Bluetooth** connects local audio hardware, such as AirPods, to an endpoint. The design does not assume AirPods expose a general-purpose network link between arbitrary computers and phones.
 - **TUN** is a virtual network interface used by VPNs. This audio application does not need to route all device traffic through a VPN.
 - **Local networking** is a possible future direct transport between endpoints on a reachable network.
@@ -130,19 +174,19 @@ The Cloudflare account-level TURN key remains server-side. Apps receive short-li
 
 ## Automatic route selection
 
-After TURN works, the engine can choose a path for each approved device pair. It should choose among measured, usable paths rather than assume one technology always has the lowest latency.
+The engine can choose a path for each approved device pair, within that session's network and spending permissions. It should choose among measured, usable paths rather than assume one technology always has the lowest latency.
 
 Candidate paths:
 
 1. A verified direct local connection, if available and allowed.
 2. Another verified direct internet path discovered through ICE/STUN.
-3. A TURN relay path.
+3. A TURN relay path, only if the user has separately enabled it.
 
 Each candidate needs recent measurements for latency, jitter, loss, and liveness. Select a stable usable path, not merely the one with the smallest single ping. Use hysteresis and a minimum stable interval to prevent rapid route flapping. Keep the existing path until a replacement has passed connectivity and media checks where possible.
 
 ```mermaid
 flowchart TD
-    A[Approved audio route] --> B[Start TURN path]
+    A[Approved audio route] --> B[Find permitted direct paths]
     B --> C[Receive and validate media]
     C --> D[Stream audio]
     D --> E[Probe other permitted paths]
@@ -243,7 +287,7 @@ flowchart TD
     C --> D[Choose one or more destinations]
     D --> E[Recipients approve the route]
     E --> F[Grant required OS capture permissions]
-    F --> G[Start TURN connection]
+    F --> G[Start best permitted connection]
     G --> H[Validate arriving media]
     H --> I{Hear the test sound?}
     I -->|No| X[Show the failure and retry controls]
@@ -316,9 +360,9 @@ Do not present the existing Bluetooth utility as the completed permission-based 
 
 ## Development milestones
 
-### 1. Control plane and TURN proof
+### 1. Control plane and direct-connection proof
 
-Build device identities, pairing, route consent, expiring credentials, and a TURN-forced two-device connection. Send a generated test stream. Confirm that denial and revocation actually prevent media delivery.
+Build device identities, pairing, route consent, and a direct two-device connection using free discovery paths. Send a generated test stream. Confirm that denial and revocation actually prevent media delivery and that no TURN credentials are obtained in free mode.
 
 ### 2. Useful Mac-to-iPhone playback
 
@@ -334,7 +378,7 @@ Publish the approved headset or phone microphone, receive it on the Mac, and exp
 
 ### 5. Automatic path optimization
 
-Add direct paths, measured route selection, hysteresis, TURN fallback, and Wi-Fi/cellular transitions. Keep route permissions independent of transport selection.
+Add measured route selection, hysteresis, optional approved TURN fallback, existing tunnel paths, and Wi-Fi/cellular transitions. Keep route permissions independent of transport selection.
 
 ### 6. Synchronized speaker mode
 
@@ -344,7 +388,9 @@ Add clock synchronization, playout scheduling, drift correction, and multi-speak
 
 | Area | Required evidence |
 | --- | --- |
-| TURN | Relay-only configuration and transport statistics show the test really used TURN. |
+| Cost policy | Free mode never obtains TURN credentials or uses a paid relay. |
+| TURN, when enabled | Relay-only configuration and transport statistics show the test really used TURN. |
+| Omni mode | Every active group route has valid source and destination grants; new devices and microphones are not shared silently. |
 | Permission | A rejected, expired, or revoked route stops or prevents audio packets reaching the recipient. |
 | Playback | Intended headset reproduces the test; an accepted API call alone is not a pass. |
 | Mixing | Local phone music and the incoming Mac stream are independently audible and controllable. |
@@ -370,6 +416,6 @@ Add clock synchronization, playout scheduling, drift correction, and multi-speak
 - [WebRTC: peer connections and signaling](https://webrtc.org/getting-started/peer-connections)
 - [Cloudflare: TURN service](https://developers.cloudflare.com/realtime/turn/)
 - [Cloudflare: short-lived TURN credentials](https://developers.cloudflare.com/realtime/turn/generate-credentials/)
-- [Cloudflare: TURN operation and reconnect considerations](https://developers.cloudflare.com/realtime/turn/faq/)
+- [Cloudflare: TURN operation, free STUN, and reconnect considerations](https://developers.cloudflare.com/realtime/turn/faq/)
 - [RFC 8489: STUN](https://www.rfc-editor.org/rfc/rfc8489)
 - [RFC 8656: TURN](https://www.rfc-editor.org/rfc/rfc8656)

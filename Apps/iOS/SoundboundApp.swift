@@ -12,21 +12,35 @@ final class PhoneAudioModel: ObservableObject {
     private var testGeneration = UUID()
     @Published var message: String?
     var onTestStarted: ((String) -> Void)?
+    var onTestStopped: ((String) -> Void)?
+    private var testOutputID: String?
     var onTestFrame: ((String, Data) -> Void)?
     func perform(_ action: LocalAudioAction, id: String) {
-        if case .stopTest = action { testGeneration = UUID(); testTone.stop(); testPlayback.stop(); return }
-        guard case .testOutput = action, devices.contains(where: { $0.id == id && $0.hasOutput && $0.selectedOutput }) else { return }
+        if case .stopTest = action { stopTest(); return }
+        let repeating: Bool
+        switch action {
+        case .testOutput: repeating = true
+        case .testOutputOnce: repeating = false
+        default: return
+        }
+        guard devices.contains(where: { $0.id == id && $0.hasOutput && $0.selectedOutput }) else { return }
         do {
+            stopTest()
             let generation = UUID(); testGeneration = generation
             try testPlayback.startPlayback(expectedOutputID: id)
-            testTone.startTestTone { [weak self] pcm in self?.testPlayback.play(pcm); self?.onTestFrame?(id, pcm) }
+            testOutputID = id
+            testTone.startTestTone(repeating: repeating) { [weak self] pcm in self?.testPlayback.play(pcm); self?.onTestFrame?(id, pcm) }
             onTestStarted?(id)
             message = "Playing test sound"
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) { [weak self] in
+            if !repeating { DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) { [weak self] in
                 guard let self, self.testGeneration == generation else { return }
-                self.testTone.stop(); self.testPlayback.stop(); self.message = nil
-            }
+                self.stopTest()
+            } }
         } catch { message = error.localizedDescription }
+    }
+    private func stopTest() {
+        testGeneration = UUID(); testTone.stop(); testPlayback.stop(); message = nil
+        if let id = testOutputID { onTestStopped?(id); testOutputID = nil }
     }
     init() {
         refresh()
@@ -70,7 +84,7 @@ struct SoundboundMobileApp: App {
     var body: some Scene {
         WindowGroup {
             SoundboundRootView(store: store, localAudioDevices: audio.devices, audioMessage: audio.message, onAudioAction: { audio.perform($0, id: $1) })
-                .onAppear { audio.onTestStarted = { store.activity.chirp($0); store.activity.chirp(store.deviceID) }; audio.onTestFrame = { store.activity.updateLevel($0, pcm: $1) } }
+                .onAppear { audio.onTestStarted = { store.activity.chirp($0); store.activity.chirp(store.deviceID) }; audio.onTestStopped = { store.activity.clear($0); store.activity.clear(store.deviceID) }; audio.onTestFrame = { store.activity.updateLevel($0, pcm: $1) } }
                 .onOpenURL { url in
                     if url.host != "auth" { store.join(codeOrLink: url.absoluteString) }
                 }

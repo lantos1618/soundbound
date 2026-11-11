@@ -62,7 +62,7 @@ struct SavedHub: Codable {
 }
 
 public enum LocalAudioAction {
-    case useOutput, useInput, connect, disconnect, testSound, testOutput, stopTest, heardSound, didNotHearSound
+    case useOutput, useInput, connect, disconnect, testSound, testOutput, testOutputOnce, stopTest, heardSound, didNotHearSound
 }
 
 /// A device reported by the host OS, separate from a paired Soundbound peer.

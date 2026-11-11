@@ -48,7 +48,7 @@ public final class RoomPlaybackTest: ObservableObject {
                     guard self?.generation == token else { return }; self?.next()
                 }
             }
-            store.sendAudioTest(to: peer, outputID: output)
+            store.sendAudioTest(to: peer, outputID: output, repeating: false)
             if !store.mesh.active { next() }
         }
     }

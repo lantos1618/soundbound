@@ -336,9 +336,12 @@ private struct LocalAudioRow: View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 8) {
                 AudioDeviceGlyph(activity: store.activity, id: device.id, symbol: device.icon, name: device.name,
-                    input: device.hasInput && !device.hasOutput ? device : nil, enabled: device.isAvailable && !device.busy && !store.mesh.active) {
+                    input: device.hasInput && !device.hasOutput ? device : nil, enabled: store.activity.modes[device.id] == .chirping || (device.isAvailable && !device.busy && !store.mesh.active)) {
                     if device.hasOutput {
-                        if store.activity.modes[device.id] == .chirping { action(.stopTest, device.id); store.activity.clear(device.id) }
+                        if store.activity.modes[device.id] == .chirping {
+                            if store.mesh.active { store.mesh.stop() } else { action(.stopTest, device.id) }
+                            store.activity.clear(device.id)
+                        }
                         else { action(.testOutput, device.id) }
                     }
                     else { store.activity.showRecordingHint(device.id) }
@@ -717,7 +720,10 @@ private struct HomeView: View {
     }
     private func testLocalHost() {
         if let output = localAudioDevices.first(where: { $0.hasOutput && $0.selectedOutput }) {
-            if store.activity.modes[output.id] == .chirping { onAudioAction(.stopTest, output.id); store.activity.clear(output.id); store.activity.clear(store.deviceID) }
+            if store.activity.modes[output.id] == .chirping {
+                if store.mesh.active { store.mesh.stop() } else { onAudioAction(.stopTest, output.id) }
+                store.activity.clear(output.id); store.activity.clear(store.deviceID)
+            }
             else { onAudioAction(.testOutput, output.id) }
         }
     }
@@ -734,7 +740,7 @@ private struct HomeView: View {
             targets += outputs.map { .remote(peer: peer.id, output: $0.id, name: $0.name) }
             if wholeHost && outputs.isEmpty { targets.append(.remote(peer: peer.id, output: nil, name: peer.card.name)) }
         }
-        roomTest.start(targets, store: store) { onAudioAction(.testOutput, $0) }
+        roomTest.start(targets, store: store) { onAudioAction(.testOutputOnce, $0) }
     }
     private func dropOutline(active: Bool) -> some View {
         RoundedRectangle(cornerRadius: 18)
@@ -819,7 +825,11 @@ private struct HomeView: View {
 
     private func peerRow(_ peer: KnownPeer) -> some View {
         HomeDeviceRow(name: peer.card.name, owner: "Paired device", kind: peer.card.kind, activity: store.activity, activityID: "peer:" + peer.id,
-            nearby: store.nearby.contains { $0.id == peer.id }, dragID: "peer:" + peer.id, testAction: { store.sendAudioTest(to: peer.id) })
+            nearby: store.nearby.contains { $0.id == peer.id }, dragID: "peer:" + peer.id, testAction: {
+                let mode = store.activity.modes["peer:" + peer.id]
+                if mode == .chirping || mode == .waiting { store.mesh.stop() }
+                else { store.sendAudioTest(to: peer.id) }
+            })
             .onDrop(of: [UTType.plainText], isTargeted: nil) { acceptHostDrop($0, hostID: peer.id) }
             .contextMenu {
                 ForEach(store.rooms) { room in

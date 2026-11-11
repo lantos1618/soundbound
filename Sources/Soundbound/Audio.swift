@@ -83,6 +83,8 @@ final class SoundModel: NSObject, ObservableObject {
         didSet { UserDefaults.standard.set(quietPrompts, forKey: "quietPrompts") }
     }
     var onTestStarted: ((String) -> Void)?
+    var onTestStopped: ((String) -> Void)?
+    private var outputTestID: String?
     var onTestFrame: ((String, Data) -> Void)?
     var onDeparture: ((String) -> Void)?
     private var listeners: [(AudioObjectPropertyAddress, AudioObjectPropertyListenerBlock)] = []
@@ -401,14 +403,17 @@ final class SoundModel: NSObject, ObservableObject {
             testSound()
         case .testOutput:
             guard let output else { message = RoutingError.unavailable.localizedDescription; return }
-            playOutputTest(output)
+            playOutputTest(output, repeating: true)
+        case .testOutputOnce:
+            guard let output else { message = RoutingError.unavailable.localizedDescription; return }
+            playOutputTest(output, repeating: false)
         case .stopTest: break
         case .heardSound: confirmSound(heard: true)
         case .didNotHearSound: confirmSound(heard: false)
         }
     }
 
-    private func playOutputTest(_ output: Output) {
+    private func playOutputTest(_ output: Output, repeating: Bool) {
         guard !busy else { return }
         let engine = AVAudioEngine(), player = AVAudioPlayerNode()
         do {
@@ -434,13 +439,14 @@ final class SoundModel: NSObject, ObservableObject {
                 DispatchQueue.main.async { self?.onTestFrame?(targetID, bytes) }
             }
             verificationEngine = engine; verificationPlayer = player; operationID = targetID
-            try engine.start(); player.scheduleBuffer(buffer); player.play()
+            outputTestID = targetID
+            try engine.start(); player.scheduleBuffer(buffer, at: nil, options: repeating ? .loops : [], completionHandler: nil); player.play()
             onTestStarted?(rowID(for: output))
             message = "Playing a quiet test on \(output.name)."
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
+            if !repeating { DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
                 guard let self, self.verificationEngine === engine else { return }
                 self.resetSoundCheck(); self.operationID = nil
-            }
+            } }
         } catch { resetSoundCheck(); operationID = nil; message = error.localizedDescription }
     }
 
@@ -542,6 +548,7 @@ final class SoundModel: NSObject, ObservableObject {
         verificationEngine?.stop()
         verificationPlayer = nil
         verificationEngine = nil
+        if let id = outputTestID { onTestStopped?(id); outputTestID = nil }
         connectionCheck.reset()
     }
 

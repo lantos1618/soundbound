@@ -226,7 +226,7 @@ public final class HubStore: ObservableObject {
         mesh.shareMicrophone(to: peer, identity: identity, card: card)
     }
 
-    public func sendAudioTest(to id: String, outputID: String? = nil) {
+    public func sendAudioTest(to id: String, outputID: String? = nil, repeating: Bool = true) {
         guard let identity, friends.contains(where: { $0.id == id }),
               let peer = nearby.first(where: { $0.id == id }) else {
             notice = "Pair this device and turn on Discover on both devices first."; return
@@ -235,7 +235,7 @@ public final class HubStore: ObservableObject {
         let key = outputID.map { Self.remoteComponentID(peer: id, component: $0) } ?? "peer:" + id
         activity.waiting(key)
         mesh.onTestStarted = { [weak self] in self?.activity.chirp(key); self?.activity.chirp("peer:" + id) }
-        mesh.sendTestTone(to: peer, identity: identity, card: card, outputID: outputID)
+        mesh.sendTestTone(to: peer, identity: identity, card: card, outputID: outputID, repeating: repeating)
     }
 
     public func addRoom(name: String, region: String, policy: JoinPolicy) {

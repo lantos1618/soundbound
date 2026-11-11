@@ -34,13 +34,7 @@ public final class DeviceAudioActivity: ObservableObject {
         for id in Array(modes.keys) where modes[id] == .waiting { modes[id] = nil }
     }
     public func chirp(_ id: String) {
-        modes[id] = .chirping; levels[id] = 0.8
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) { [weak self] in
-            guard self?.modes[id] == .chirping else { return }; self?.levels[id] = 0.25
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.55) { [weak self] in
-            guard self?.modes[id] == .chirping else { return }; self?.modes[id] = nil; self?.levels[id] = nil
-        }
+        modes[id] = .chirping; levels[id] = 0
     }
     public func beginRecording(_ device: LocalAudioDevice) {
         guard device.hasInput, device.isAvailable, captureID == nil else { return }

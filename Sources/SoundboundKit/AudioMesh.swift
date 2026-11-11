@@ -34,6 +34,7 @@ public final class AudioMesh: ObservableObject {
     private var incomingRespond: ((SignedEnvelope) -> Void)?
     private var incomingIdentity: Identity?
     private var incomingCard: PeerCard?
+    private var repeatTestTone = true
     private var seen: [String: Date] = [:]
     private var interruption: NSObjectProtocol?
 
@@ -55,8 +56,9 @@ public final class AudioMesh: ObservableObject {
             self.beginOffer(peer: peer, identity: identity, card: card, attempt: attempt, recordingID: recordingID)
         }
     }
-    func sendTestTone(to peer: NearbyPeer, identity: Identity, card: PeerCard, outputID: String? = nil) {
+    func sendTestTone(to peer: NearbyPeer, identity: Identity, card: PeerCard, outputID: String? = nil, repeating: Bool = true) {
         guard !active else { return }
+        repeatTestTone = repeating
         active = true; packets = 0
         let attempt = UUID(); generation = attempt
         beginOffer(peer: peer, identity: identity, card: card, attempt: attempt, testTone: true, outputID: outputID)
@@ -133,13 +135,13 @@ public final class AudioMesh: ObservableObject {
                         }
                     }
                     if offer.source == "test-tone" {
-                        self.io.startTestTone(frame: send)
+                        self.io.startTestTone(repeating: self.repeatTestTone, frame: send)
                         self.onTestStarted?()
                         self.status = "Sending quiet test tone…"
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 1.4) { [weak self] in
+                        if !self.repeatTestTone { DispatchQueue.main.asyncAfter(deadline: .now() + 1.4) { [weak self] in
                             guard let self, self.generation == attempt else { return }
                             self.stop(reason: "Test tone finished")
-                        }
+                        } }
                     } else {
                         try self.io.startCapture(inputSystemID: self.selectedInput?.systemInputID, inputUID: self.selectedInput.map { $0.id.hasPrefix("input:") ? String($0.id.dropFirst(6)) : $0.id }, frame: send)
                         if offer.recordingID != nil {

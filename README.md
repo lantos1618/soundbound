@@ -19,7 +19,7 @@ A native macOS and iOS app for managing audio devices and sharing sound with per
 - Distinguish built-in, Bluetooth, Apple Continuity, wired, and virtual endpoints. Drag wireless headphones onto a host to request a move; built-in hardware stays attached. iPhone uses Apple’s output chooser after approval.
 - Configure per-device change confirmations, notifications, and removal after a sustained disconnect.
 - Tap a device icon for a short test tone; green shows playback, amber shows a pending request. Tap a local microphone to record; tap again to stop. A red amplitude waveform shows captured audio.
-- Tap a room name to test its available outputs in sequence. Paired devices play automatically.
+- Tap a device’s output icon to keep its test sound playing; tap again to stop. Tap a room name to test its available outputs briefly in sequence. Paired devices play automatically.
 
 Both apps use the version and build number in `VERSION`, shown at the bottom of Settings.
 Run `bash scripts/build-both.sh` to build the same source for both platforms and verify both bundles match `VERSION`. A mismatched pair fails the build check. UI, device state, pairing, room logic, and the audio transport live in the shared `SoundboundKit` package; platform adapters handle macOS Core Audio and iOS audio sessions.

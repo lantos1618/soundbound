@@ -21,14 +21,17 @@ final class MeshAudioIO {
         AVCaptureDevice.requestAccess(for: .audio) { allowed in DispatchQueue.main.async { completion(allowed) } }
         #endif
     }
-    func startTestTone(frame: @escaping (Data) -> Void) {
+    func startTestTone(repeating: Bool = true, frame: @escaping (Data) -> Void) {
         stop()
         var offset = 0
         let timer = DispatchSource.makeTimerSource(queue: .main)
         toneTimer = timer
         timer.schedule(deadline: .now(), repeating: 0.02)
         timer.setEventHandler {
-            guard offset < 6_240 else { return }
+            if offset >= 6_240 {
+                guard repeating else { return }
+                offset = 0
+            }
             let samples: [Int16] = (0..<480).map { index in
                 let t = Double(offset + index) / 24_000
                 let fade = min(1, min(t / 0.05, max(0, (0.26 - t) / 0.06)))

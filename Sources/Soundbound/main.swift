@@ -8,7 +8,7 @@ struct DesktopHubView: View {
     var body: some View {
         SoundboundRootView(store: store, localAudioDevices: audio.localAudioDevices, audioMessage: audio.message,
             onAudioAction: { audio.perform($0, id: $1) }, onAudioVolume: { audio.setVolume($0, level: $1) })
-            .onAppear { audio.onTestStarted = { store.activity.chirp($0); store.activity.chirp(store.deviceID) }; audio.onTestFrame = { store.activity.updateLevel($0, pcm: $1) } }
+            .onAppear { audio.onError = { store.notice = $0 }; audio.onTestStarted = { store.activity.chirp($0); store.activity.chirp(store.deviceID) }; audio.onTestFrame = { store.activity.updateLevel($0, pcm: $1) } }
     }
 }
 
@@ -41,6 +41,8 @@ struct ToastView: View {
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let model = SoundModel()
     private let hub = HubStore()
+    private let mixer = AppMixer()
+    private let quickPopover = NSPopover()
     private var hubWindow: NSWindow?
     private var item: NSStatusItem!
     private let quickMenu = NSMenu()
@@ -67,8 +69,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         item.button?.toolTip = "Soundbound — sound stays here"
         quickMenu.delegate = self
         quickMenu.autoenablesItems = false
-        item.menu = quickMenu
-        menuNeedsUpdate(quickMenu)
+        item.button?.target = self
+        item.button?.action = #selector(toggleMenu)
+        quickPopover.behavior = .transient
+        quickPopover.animates = true
         NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(woke), name: NSWorkspace.didWakeNotification, object: nil)
         DispatchQueue.main.async { [weak self] in self?.showHub() }
     }
@@ -202,10 +206,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc private func openBluetoothSettings() { NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.BluetoothSettings")!) }
     @objc private func quitSoundbound() { NSApp.terminate(nil) }
     private func showMenu() {
-        menuNeedsUpdate(quickMenu)
-        // Use the click location so Quick controls also works when macOS has
-        // hidden the status item behind other menu-bar extras.
-        quickMenu.popUp(positioning: nil, at: NSEvent.mouseLocation, in: nil)
+        if quickPopover.isShown { quickPopover.performClose(nil); return }
+        guard let button = item.button else { return }
+        model.refresh(); mixer.refresh()
+        quickPopover.contentViewController = NSHostingController(rootView: QuickControls(store: hub, audio: model, mixer: mixer,
+            openApp: { [weak self] in self?.quickPopover.performClose(nil); self?.showHub() },
+            quit: { NSApp.terminate(nil) }))
+        quickPopover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
     }
 
     private func showEventToast(_ message: String) {

@@ -9,9 +9,9 @@ Signing out cancels pending authorization, clears Soundbound’s cached profile,
 
 ## Current setup
 
-Native iOS and macOS development builds have the Sign in with Apple entitlement and provisioning profiles. The alternate-account path requires a deployed broker and a registered Services ID before its button is enabled. Do not claim account switching is available merely because the client code compiles.
+Native iOS and macOS development builds have the Sign in with Apple entitlement and provisioning profiles. The alternate-account broker is deployed at `https://soundbound-auth.l-leong1618.workers.dev`, using Services ID `app.soundbound.web`. Both app configurations point to its `/apple/start` URL. The live health check reports configured, and a start request has been verified to redirect to Apple with the registered callback. A user-completed web login is still required for end-to-end validation.
 
-Set `SoundboundAppleWebAuthURL` in each app’s Info.plist to the broker’s HTTPS `/apple/start` URL only after the service is configured. No Apple private key belongs in the app.
+`SoundboundAppleWebAuthURL` is set in both app Info.plists. Apple signing secrets are stored only in the auth Worker; no private key belongs in the app or repository.
 
 ## Broker configuration
 

@@ -230,20 +230,20 @@ private struct DeviceWaveform: View {
         let mode = activity.modes[id] ?? .idle
         Canvas { context, size in
             let samples = activity.waveforms[id] ?? []
-            let color: Color = mode == .recording ? .red : mode == .chirping ? .green : .orange
-            if mode != .idle {
-                let count = 24
-                let width = size.width / Double(count)
-                for index in 0..<count {
-                    let sample = index < samples.count ? samples[index] : 0
-                    let height = max(2, sample * size.height)
-                    let rect = CGRect(x: Double(index) * width, y: size.height - height, width: max(1, width - 1.5), height: height)
-                    context.fill(Path(roundedRect: rect, cornerRadius: 1), with: .color(color))
-                }
+            let color: Color = mode == .recording ? .red : mode == .chirping ? .green : mode == .waiting ? .orange : .secondary.opacity(0.25)
+            var path = Path()
+            let baseline = size.height - 1
+            let count = 32
+            for index in 0..<count {
+                let sampleIndex = index - (count - samples.count)
+                let sample = mode == .idle || sampleIndex < 0 || sampleIndex >= samples.count ? 0 : samples[sampleIndex]
+                let point = CGPoint(x: Double(index) * size.width / Double(count - 1), y: baseline - min(1, sample) * (size.height - 2))
+                if index == 0 { path.move(to: point) } else { path.addLine(to: point) }
             }
-        }.frame(width: 68, height: 24)
-        .accessibilityLabel(mode == .recording ? "Recording level" : mode == .chirping ? "Playback level" : "")
-        .accessibilityHidden(mode == .idle)
+            if mode != .idle { context.stroke(path, with: .color(color), style: StrokeStyle(lineWidth: 1.5, lineCap: .round, lineJoin: .round)) }
+        }.frame(maxWidth: 220).frame(height: 24)
+        .accessibilityLabel(mode == .recording ? "Recording level" : mode == .chirping ? "Playback level" : "Audio level")
+
     }
 }
 
@@ -284,9 +284,11 @@ private struct DeviceRowText: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             HStack(spacing: 6) {
                 AudioStateLabel(activity: activity, id: id, fallback: status).lineLimit(1)
-                Spacer(minLength: 0)
+                    .frame(width: 72, alignment: .leading)
+                DeviceWaveform(activity: activity, id: id)
                 if canReplay { RecordingReplayControl(activity: activity, id: id) }
-            }.frame(height: 18)
+                Spacer(minLength: 0)
+            }.frame(height: 24)
         }.frame(maxWidth: .infinity, alignment: .leading).layoutPriority(1)
     }
 }
@@ -343,13 +345,13 @@ private struct LocalAudioRow: View {
                 DeviceRowText(name: device.name,
                     detail: device.connectionLabel + " · " + (device.hasInput && device.hasOutput ? "Input & output" : device.hasInput ? "Microphone" : "Speaker"),
                     activity: store.activity, id: device.id, status: device.status, canReplay: true)
-                DeviceWaveform(activity: store.activity, id: device.id)
+                    .modifier(DeviceDragArea(id: "audio:" + device.id, name: device.name))
 
 
             }
             if device.volume != nil {
                 HStack(spacing: 10) {
-                    Text("Volume").font(.caption).foregroundStyle(.secondary)
+                    Text("Volume").font(.caption).foregroundStyle(.secondary).frame(width: 72, alignment: .leading)
                     Slider(value: $level, in: 0...1) { isEditing in
                         editing = isEditing
                         if !isEditing { volumeChanged(device.id, level) }
@@ -358,7 +360,7 @@ private struct LocalAudioRow: View {
                     .accessibilityLabel("Volume for \(device.name)").disabled(device.busy)
                     Text("\(Int(level * 100))%").font(.caption).monospacedDigit().foregroundStyle(.secondary).frame(width: 34, alignment: .trailing)
                     Spacer(minLength: 0)
-                }.padding(.leading, 76)
+                }.padding(.leading, 48)
             }
             if device.awaitingTestAnswer {
                 HStack {
@@ -369,7 +371,6 @@ private struct LocalAudioRow: View {
             }
         }
         .padding(.vertical, 10)
-        .modifier(DeviceDragArea(id: "audio:" + device.id, name: device.name))
         .contextMenu {
             Button("Device settings") { showingSettings = true }
             if device.hasInput {
@@ -385,7 +386,7 @@ private struct LocalAudioRow: View {
         .onAppear { level = device.volume ?? 0.5 }
         .onChange(of: device.volume) { value in if !editing { level = value ?? 0.5 } }
         .onChange(of: level) { value in
-            if !editing, let actual = device.volume, abs(value - actual) > 0.005 { volumeChanged(device.id, value) }
+            if let actual = device.volume, abs(value - actual) > 0.005 { volumeChanged(device.id, value) }
         }
     }
 }
@@ -421,6 +422,17 @@ private struct AudioDeviceSettingsView: View {
                         if device.canDisconnect { Button("Disconnect here") { request(.disconnect) }.disabled(device.busy) }
                         if device.canTest { Button("Test sound") { action(.testSound, device.id); dismiss() }.disabled(device.busy) }
                     }.buttonStyle(.bordered)
+                    if device.connection == .bluetooth {
+                        Divider()
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Stop Apple’s automatic switching").font(.headline)
+                            Text("In your AirPods settings, set Connect to This Mac and Connect to This iPhone to When Last Connected. Do this on both devices.")
+                                .font(.subheadline).fixedSize(horizontal: false, vertical: true)
+                            Text("Soundbound asks before its own moves. Apple’s automatic handoffs bypass those requests.")
+                                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                            Link("Apple’s setup instructions", destination: URL(string: "https://support.apple.com/104988")!)
+                        }
+                    }
                     Divider()
                     VStack(alignment: .leading, spacing: 14) {
                         Text("When things change").font(.headline)
@@ -491,7 +503,7 @@ private struct HomeDeviceRow: View {
                 enabled: testAction != nil) { testAction?() }
             DeviceRowText(name: name, detail: owner, activity: activity, id: activityID,
                           status: isLocal ? "This device" : (nearby ? "Nearby" : "Offline"))
-            DeviceWaveform(activity: activity, id: activityID)
+
         }.padding(.vertical, 10)
             .modifier(DeviceDragArea(id: dragID, name: name))
             .contextMenu { if let settingsAction { Button("Device settings", action: settingsAction) } }
@@ -593,6 +605,10 @@ private struct HomeView: View {
                                 Text(room.owner == store.deviceID ? room.region : "Synced · " + (store.friends.first(where: { $0.id == room.owner })?.card.name ?? "Paired device"))
                                     .font(.caption).foregroundStyle(.secondary)
                                 Spacer()
+                                Button { store.setActiveRoom(store.activeRoomID == room.id ? nil : room.id) } label: {
+                                    Label(store.activeRoomID == room.id ? "Active" : "Off", systemImage: "power")
+                                        .foregroundStyle(store.activeRoomID == room.id ? Color.green : Color.secondary)
+                                }.buttonStyle(.plain).help("Activate or pause this room on this device")
                                 Button { roomSettings = room } label: { Image(systemName: "gearshape").frame(width: 24, height: 24) }
                                     .buttonStyle(.plain).disabled(room.owner != store.deviceID)
                                     .help(room.owner == store.deviceID ? "Room settings" : "Edit this room on the device that created it")
@@ -700,6 +716,7 @@ private struct HomeView: View {
         }
     }
     private func testRoom(_ room: AudioRoom) {
+        store.setActiveRoom(room.id)
         var targets: [RoomTestTarget] = localAudioDevices.filter {
             $0.hasOutput && $0.isAvailable && store.audioDevice($0.id, belongsTo: room.id)
         }.map { .local(id: $0.id, name: $0.name) }
@@ -782,7 +799,7 @@ private struct HomeView: View {
                 detail: component.connectionLabel + " · " + (component.hasInput && component.hasOutput ? "Input & output" : component.hasInput ? "Microphone" : "Speaker"),
                 activity: store.activity, id: id,
                 status: component.selectedOutput || component.selectedInput ? "In use" : component.isAvailable ? "Available" : "Not connected")
-            DeviceWaveform(activity: store.activity, id: id)
+
         }
         .padding(.vertical, 10)
         .modifier(DeviceDragArea(id: id, name: component.name))
@@ -1216,7 +1233,7 @@ private struct SettingsView: View {
             DetailSection(title: "Paired devices") {
                 Toggle("Play audio from paired devices automatically", isOn: $store.automaticPairedPlayback)
                     .toggleStyle(.switch)
-                Text("Pairing grants playback permission. Microphones still need an explicit hold or share action.")
+                Text("Pairing grants playback permission. Microphones still need an explicit record or share action.")
                     .font(.caption).foregroundStyle(.secondary)
             }
             DetailSection(title: "Nearby discovery") {

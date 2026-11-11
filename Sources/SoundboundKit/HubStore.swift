@@ -10,6 +10,8 @@ public final class HubStore: ObservableObject {
         let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "Local"
         return version + " (" + build + ")"
     }
+    @Published public private(set) var activeRoomID: String?
+    public var activeRoom: AudioRoom? { rooms.first { $0.id == activeRoomID } }
     @Published public var name: String
     @Published public internal(set) var rooms: [AudioRoom]
     @Published public private(set) var friends: [KnownPeer]
@@ -87,6 +89,7 @@ public final class HubStore: ObservableObject {
 
     public init(identity: Identity? = nil, defaults: UserDefaults = .standard) {
         self.defaults = defaults
+        self.activeRoomID = defaults.string(forKey: "Soundbound.activeRoom")
         self.automaticPairedPlayback = defaults.object(forKey: "Soundbound.automaticPairedPlayback") as? Bool ?? true
         self.persistenceKey = Identity.usesDevelopmentFile ? "SoundboundHub.development.v1" : "SoundboundHub.v1"
         self.identity = identity
@@ -244,10 +247,17 @@ public final class HubStore: ObservableObject {
         rooms.append(AudioRoom(name: String(title.prefix(60)), region: String(place.prefix(60)), owner: deviceID, policy: policy, members: [deviceID]))
         save()
     }
+    public func setActiveRoom(_ id: String?) {
+        guard id == nil || rooms.contains(where: { $0.id == id }) else { return }
+        if activeRoomID != id { mesh.stop() }
+        activeRoomID = id
+        defaults.set(id, forKey: "Soundbound.activeRoom")
+    }
     public func deleteRoom(_ id: String) {
         guard rooms.contains(where: { $0.id == id && $0.owner == deviceID }) else {
             notice = "Delete this room on the device that created it."; return
         }
+        if activeRoomID == id { setActiveRoom(nil) }
         rooms.removeAll { $0.id == id }
         deviceRooms.remove(id)
         if deviceRoom == id { deviceRoom = deviceRooms.sorted().first }

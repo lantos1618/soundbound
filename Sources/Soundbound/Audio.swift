@@ -97,6 +97,9 @@ final class SoundModel: NSObject, ObservableObject {
     @Published private var pairedLookupInProgress = false
     @Published var operationID: String?
     private var routingTask: Task<Void, Never>?
+    private var volumeTask: Task<Void, Never>?
+    private var pendingVolumes: [String: Double] = [:]
+    var onError: ((String) -> Void)?
     private var connectionLookup: UUID?
     private let routing = VerifiedAudioRouting(backend: CoreAudioRoutingBackend())
 
@@ -334,13 +337,18 @@ final class SoundModel: NSObject, ObservableObject {
     }
 
     func setVolume(_ uid: String, level: Double) {
-        guard !busy, let device = outputs.first(where: { rowID(for: $0) == uid }) else { return }
-        operationID = uid; message = nil
-        routingTask = Task { @MainActor [weak self] in
+        guard level.isFinite else { return }
+        pendingVolumes[uid] = min(1, max(0, level))
+        guard volumeTask == nil else { return }
+        volumeTask = Task { @MainActor [weak self] in
             guard let self else { return }
-            defer { self.operationID = nil; self.refresh() }
-            do { try await self.routing.setVolume(level, id: device.id) }
-            catch { self.message = error.localizedDescription }
+            defer { self.volumeTask = nil; self.refresh() }
+            while let next = self.pendingVolumes.first {
+                self.pendingVolumes.removeValue(forKey: next.key)
+                guard let device = self.outputs.first(where: { self.rowID(for: $0) == next.key }) else { continue }
+                do { try await self.routing.setVolume(next.value, id: device.id) }
+                catch { self.message = error.localizedDescription; self.onError?(error.localizedDescription) }
+            }
         }
     }
 

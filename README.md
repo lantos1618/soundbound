@@ -7,10 +7,11 @@ A native macOS and iOS app for managing audio devices and sharing sound with per
 ## What works
 
 - Discover local inputs, outputs, Bluetooth headphones, and nearby Soundbound devices.
-- Use the menu-bar quick controls to choose a headphone destination or room; open the full app for setup.
+- Use the menu-bar panel for headphone destination, hardware volume, per-application volume on macOS 14.2+, and active-room selection. System Audio Recording permission is required for application mixing.
+- Keep devices in several rooms and activate one room at a time on each host; turning a room off keeps its membership. Room activation does not yet create a synchronized multi-device mix.
 - Select the Mac’s output or microphone and adjust supported hardware volume.
 - Pair devices using a compact nearby QR code card, an inline iPhone camera scanner, short codes, nearby discovery, and explicit approval.
-- Sign in with Apple in signed builds. This identifies the local installation; account-wide friends and room permissions are not connected yet.
+- Sign in with Apple in signed builds. Use the native button for the device’s iCloud account, or Use another Apple Account for a separate web login. Account-wide friends and room permissions are not connected yet.
 - Send a short test tone or share a microphone with one paired receiver.
 - Stop audio from either device. Paired devices are allowed to play audio automatically by default; this can be changed in Settings. iPhone can notify you about a request that reaches the running app. Sharing a microphone still requires microphone permission and an explicit source action.
 - Organize local and paired devices into rooms. Local and paired devices can belong to multiple rooms. Inputs and outputs sit beneath their host device. Adding the host includes its attached components; individual components can also be added separately. Room definitions and layouts mirror from their creating device to nearby paired devices; edits stay on the creating device. Membership does not grant audio access.
@@ -23,7 +24,9 @@ Both apps use the version and build number in `VERSION`, shown at the bottom of 
 
 Right-click a room heading or open its gear menu to delete a room. Deletion keeps paired devices intact.
 
-Drag device rows by their names to add them to rooms; right-click on Mac or long-press on iPhone for settings. Remote microphone recording sends a signed request to the source device for approval, then returns encrypted audio into memory on the requesting device. This new path still needs a live two-device test.
+Drag device names to add them to rooms; right-click on Mac or long-press on iPhone for settings. Remote microphone recording sends a signed request to the source device for approval, then returns encrypted audio into memory on the requesting device. This new path still needs a live two-device test.
+
+Apple’s automatic AirPods handoff cannot be intercepted. Set **Connect to This Mac/iPhone → When Last Connected** on both devices to stop Apple switching them automatically. Soundbound can approve its own move requests, not Apple’s system handoffs.
 
 ## Try audio sharing
 

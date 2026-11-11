@@ -47,6 +47,24 @@ final class RoomSyncTests: XCTestCase {
         XCTAssertFalse(host.mergeRoomLayouts([RoomLayout(room: room, hosts: [], components: [])], from: b.id))
         XCTAssertEqual(host.rooms.first?.owner, a.id)
     }
+    func testActiveRoomIsExclusiveAndDoesNotChangeMemberships() throws {
+        let host = store(try Identity(ephemeral: true))
+        host.addRoom(name: "A", region: "Home", policy: .request)
+        host.addRoom(name: "B", region: "Home", policy: .request)
+        let a = host.rooms[0].id, b = host.rooms[1].id
+        host.moveDevice(to: a); host.moveDevice(to: b)
+        let memberships = host.deviceRooms
+        host.setActiveRoom(a)
+        XCTAssertEqual(host.activeRoom?.id, a)
+        host.setActiveRoom(b)
+        XCTAssertEqual(host.activeRoom?.id, b)
+        XCTAssertEqual(host.deviceRooms, memberships)
+        host.setActiveRoom("unknown")
+        XCTAssertEqual(host.activeRoom?.id, b)
+        host.setActiveRoom(nil)
+        XCTAssertNil(host.activeRoom)
+        XCTAssertEqual(host.deviceRooms, memberships)
+    }
     func testMoveRequiresPairedSenderAndExplicitApproval() throws {
         let a = try Identity(ephemeral: true), b = try Identity(ephemeral: true)
         let host = store(a)

@@ -185,10 +185,14 @@ public final class AppleAccount: NSObject, ObservableObject, ASAuthorizationCont
     public func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {
         authorizationWindow ?? ASPresentationAnchor()
     }
-    public func useAnotherAccount() {
+    public func useAnotherAccount(in anchor: ASPresentationAnchor? = nil) {
         guard !isBusy else { return }
-        guard let startURL = webAuthURL, let window = currentWindow else {
-            message = "Switching accounts needs the configured Apple web sign-in service."
+        guard let startURL = webAuthURL else {
+            message = "The Apple web sign-in service is not configured in this build."
+            return
+        }
+        guard let window = anchor ?? currentWindow else {
+            message = "Open Soundbound’s Settings window, then try again."
             return
         }
         signOut()
@@ -302,8 +306,9 @@ public struct AppleAccountView: View {
             if account.isBusy {
                 Button("Cancel sign-in") { account.cancelSignIn() }.buttonStyle(.bordered)
             } else {
-                Button("Use another Apple Account") { account.useAnotherAccount() }
-                    .buttonStyle(.plain).disabled(!account.isWebConfigured)
+                AppleWebAccountButton(account: account)
+                    .frame(width: 220, height: 32)
+                    .disabled(!account.isWebConfigured)
                 if !account.isWebConfigured {
                     Text("Account switching is waiting for the Apple web sign-in service.")
                         .font(.caption).foregroundStyle(.secondary)
@@ -356,3 +361,40 @@ private final class AppleAuthNoRedirect: NSObject, URLSessionTaskDelegate {
         completionHandler(nil)
     }
 }
+
+#if os(iOS)
+private final class AppleWebAccountButtonCoordinator: NSObject {
+    let account: AppleAccount
+    init(_ account: AppleAccount) { self.account = account }
+    @objc func pressed(_ sender: UIButton) { account.useAnotherAccount(in: sender.window) }
+}
+private struct AppleWebAccountButton: UIViewRepresentable {
+    let account: AppleAccount
+    func makeCoordinator() -> AppleWebAccountButtonCoordinator { AppleWebAccountButtonCoordinator(account) }
+    func makeUIView(context: Context) -> UIButton {
+        let button = UIButton(type: .system)
+        button.setTitle("Use another Apple Account", for: .normal)
+        button.addTarget(context.coordinator, action: #selector(AppleWebAccountButtonCoordinator.pressed(_:)), for: .touchUpInside)
+        return button
+    }
+    func updateUIView(_ button: UIButton, context: Context) { button.isEnabled = context.environment.isEnabled }
+}
+#else
+private final class AppleWebAccountButtonCoordinator: NSObject {
+    let account: AppleAccount
+    init(_ account: AppleAccount) { self.account = account }
+    @objc func pressed(_ sender: NSButton) { account.useAnotherAccount(in: sender.window) }
+}
+private struct AppleWebAccountButton: NSViewRepresentable {
+    let account: AppleAccount
+    func makeCoordinator() -> AppleWebAccountButtonCoordinator { AppleWebAccountButtonCoordinator(account) }
+    func makeNSView(context: Context) -> NSButton {
+        let button = NSButton(title: "Use another Apple Account", target: context.coordinator,
+                              action: #selector(AppleWebAccountButtonCoordinator.pressed(_:)))
+        button.isBordered = false
+        button.contentTintColor = .systemBlue
+        return button
+    }
+    func updateNSView(_ button: NSButton, context: Context) { button.isEnabled = context.environment.isEnabled }
+}
+#endif

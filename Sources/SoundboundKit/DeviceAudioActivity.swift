@@ -84,6 +84,12 @@ public final class DeviceAudioActivity: ObservableObject {
         }
         timer.resume()
     }
+    public func stopPlayback() {
+        guard captureID == nil else { return }
+        generation = UUID(); playbackTimer?.cancel(); playbackTimer = nil; io.stop()
+        if let id = recordedID { modes[id] = nil; levels[id] = nil }
+        message = "Playback stopped."
+    }
     public func stopRecording() { if let captureID { endRecording(captureID) } }
     private static func level(_ data: Data) -> Double {
         guard data.count >= 2 else { return 0 }

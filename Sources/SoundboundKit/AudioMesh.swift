@@ -1,0 +1,220 @@
+import Foundation
+import Combine
+import CryptoKit
+import Network
+import AVFAudio
+
+/// One consented, one-way microphone stream. Local TCP is the first transport;
+/// relay selection and multi-recipient mixing remain separate work.
+public final class AudioMesh: ObservableObject {
+    @Published public private(set) var status = "No audio shared"
+    @Published public private(set) var active = false
+    @Published public private(set) var incoming: IncomingAudioRequest?
+    @Published public private(set) var packets = 0
+    var sign: ((AudioOffer) throws -> SignedEnvelope)?
+    var request: ((SignedEnvelope, LocalEndpoint, @escaping (Result<SignedEnvelope, Error>) -> Void) -> Void)?
+    private var listener: NWListener?
+    private var channel: AudioMeshChannel?
+    private var candidates: [AudioMeshChannel] = []
+    private var pendingConnections: [NWConnection] = []
+    private var key: Curve25519.KeyAgreement.PrivateKey?
+    private var keys: (SymmetricKey, SymmetricKey)?
+    private var offer: AudioOffer?
+    private let io = MeshAudioIO()
+    private var generation = UUID()
+    private var incomingOffer: AudioOffer?
+    private var incomingHost: String?
+    private var incomingRespond: ((SignedEnvelope) -> Void)?
+    private var incomingIdentity: Identity?
+    private var incomingCard: PeerCard?
+    private var seen: [String: Date] = [:]
+    private var interruption: NSObjectProtocol?
+
+    public init() {
+        #if os(iOS)
+        interruption = NotificationCenter.default.addObserver(forName: AVAudioSession.interruptionNotification,
+            object: nil, queue: .main) { [weak self] _ in self?.stop(reason: "Audio interrupted") }
+        #endif
+    }
+    deinit { if let interruption { NotificationCenter.default.removeObserver(interruption) } }
+
+    func shareMicrophone(to peer: NearbyPeer, identity: Identity, card: PeerCard) {
+        guard !active else { return }
+        active = true; status = "Requesting microphone access…"; packets = 0
+        let attempt = UUID(); generation = attempt
+        MeshAudioIO.microphonePermission { [weak self] allowed in
+            guard let self, self.generation == attempt else { return }
+            guard allowed else { self.stop(reason: AudioMeshError.microphone.localizedDescription); return }
+            self.beginOffer(peer: peer, identity: identity, card: card, attempt: attempt)
+        }
+    }
+    func sendTestTone(to peer: NearbyPeer, identity: Identity, card: PeerCard) {
+        guard !active else { return }
+        active = true; packets = 0
+        let attempt = UUID(); generation = attempt
+        beginOffer(peer: peer, identity: identity, card: card, attempt: attempt, testTone: true)
+    }
+    private func beginOffer(peer: NearbyPeer, identity: Identity, card: PeerCard, attempt: UUID, testTone: Bool = false) {
+        do {
+            let ephemeral = Curve25519.KeyAgreement.PrivateKey()
+            key = ephemeral
+            let parameters = NWParameters.tcp
+            parameters.includePeerToPeer = true
+            let listener = try NWListener(using: parameters)
+            self.listener = listener
+            listener.newConnectionHandler = { [weak self] connection in
+                guard let self, self.active, self.pendingConnections.count + self.candidates.count < 4 else { connection.cancel(); return }
+                if self.keys != nil { self.makeCandidate(connection) }
+                else { self.pendingConnections.append(connection) }
+            }
+            listener.stateUpdateHandler = { [weak self, weak listener] state in
+                guard let self, self.generation == attempt else { return }
+                if case .ready = state, let port = listener?.port, self.offer == nil {
+                    let offer = AudioOffer(id: UUID().uuidString, from: card, to: peer.id,
+                        ephemeralKey: ephemeral.publicKey.rawRepresentation.url64, port: port.rawValue, created: Date(), source: testTone ? "test-tone" : "microphone")
+                    self.offer = offer; self.status = "Waiting for \(peer.invitation.peer.name) to allow audio…"
+                    do {
+                        let signed = try identity.sign(offer)
+                        self.request?(signed, peer.endpoint) { [weak self] result in
+                            guard let self, self.generation == attempt else { return }
+                            do {
+                                let envelope = try result.get()
+                                let reply = try envelope.verified(as: AudioReply.self)
+                                guard reply.kind == "audio-reply", reply.version == 1, reply.id == offer.id,
+                                      reply.to == card.id, reply.from.id == peer.id,
+                                      envelope.signer == peer.invitation.peer.publicKey,
+                                      reply.from.publicKey == envelope.signer,
+                                      abs(reply.created.timeIntervalSinceNow) < 60 else { throw AudioMeshError.invalid }
+                                guard reply.accepted, let remoteKey = reply.ephemeralKey else { throw AudioMeshError.denied }
+                                self.keys = try AudioSessionCipher.keys(privateKey: ephemeral, remote: remoteKey,
+                                    session: offer.id, source: card.id, sink: peer.id)
+                                self.status = "Securing audio connection…"
+                                let waiting = self.pendingConnections; self.pendingConnections = []
+                                waiting.forEach { self.makeCandidate($0) }
+                            } catch { self.stop(reason: error.localizedDescription) }
+                        }
+                    } catch { self.stop(reason: error.localizedDescription) }
+                } else if case .failed(let error) = state { self.stop(reason: error.localizedDescription) }
+            }
+            listener.start(queue: .main)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 40) { [weak self] in
+                guard let self, self.generation == attempt, self.channel == nil else { return }
+                self.stop(reason: AudioMeshError.expired.localizedDescription)
+            }
+        } catch { stop(reason: error.localizedDescription) }
+    }
+    private func makeCandidate(_ connection: NWConnection) {
+        guard let keys, let offer else { connection.cancel(); return }
+        let candidate = AudioMeshChannel(connection: connection, sendKey: keys.0, receiveKey: keys.1, session: offer.id, source: true)
+        candidates.append(candidate)
+        let attempt = generation
+        candidate.ready = { [weak self, weak candidate] in
+            DispatchQueue.main.async {
+                guard let self, let candidate, self.generation == attempt, self.channel == nil else { return }
+                self.channel = candidate
+                self.listener?.cancel(); self.listener = nil
+                self.candidates.filter { $0 !== candidate }.forEach { $0.stop() }; self.candidates = []
+                do {
+                    let send: (Data) -> Void = { [weak self, weak candidate] pcm in
+                        candidate?.sendAudio(pcm)
+                        DispatchQueue.main.async {
+                            guard let self, self.generation == attempt else { return }; self.packets += 1
+                        }
+                    }
+                    if offer.source == "test-tone" {
+                        self.io.startTestTone(frame: send)
+                        self.status = "Sending quiet test tone…"
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 1.4) { [weak self] in
+                            guard let self, self.generation == attempt else { return }
+                            self.stop(reason: "Test tone finished")
+                        }
+                    } else {
+                        try self.io.startCapture(frame: send)
+                        self.status = "Sharing microphone · encrypted · local network"
+                    }
+                } catch { self.stop(reason: error.localizedDescription) }
+            }
+        }
+        candidate.ended = { [weak self, weak candidate] error in
+            DispatchQueue.main.async {
+                guard let self, self.generation == attempt else { return }
+                if let candidate, self.channel === candidate { self.stop(reason: error?.localizedDescription ?? "Audio stopped") }
+            }
+        }
+        candidate.start()
+    }
+
+    func receive(_ signed: SignedEnvelope, nearby: [NearbyPeer], friends: [KnownPeer], identity: Identity, card: PeerCard,
+                 respond: @escaping (SignedEnvelope) -> Void) -> Bool {
+        guard let offer = try? signed.verified(as: AudioOffer.self), offer.kind == "audio-offer" else { return false }
+        seen = seen.filter { $0.value > Date().addingTimeInterval(-120) }
+        guard offer.version == 1, offer.from.publicKey == signed.signer, offer.to == card.id,
+              offer.port > 0, ["microphone", "test-tone"].contains(offer.source), UUID(uuidString: offer.id) != nil,
+              abs(offer.created.timeIntervalSinceNow) < 30, seen[offer.id] == nil, seen.count < 1000,
+              Data(url64: offer.ephemeralKey)?.count == 32,
+              friends.contains(where: { $0.id == offer.from.id && $0.card.publicKey == signed.signer }),
+              let peer = nearby.first(where: { $0.id == offer.from.id }) else { return true }
+        seen[offer.id] = Date()
+        guard !active, incoming == nil else {
+            let reply = AudioReply(id: offer.id, from: card, to: offer.from.id, accepted: false, created: Date())
+            if let signed = try? identity.sign(reply) { respond(signed) }; return true
+        }
+        incomingOffer = offer; incomingHost = peer.endpoint.host
+        incomingRespond = respond; incomingIdentity = identity; incomingCard = card
+        incoming = IncomingAudioRequest(id: offer.id, name: offer.from.name + (offer.source == "test-tone" ? " (test tone)" : ""))
+        DispatchQueue.main.asyncAfter(deadline: .now() + 30) { [weak self] in
+            guard self?.incoming?.id == offer.id else { return }; self?.decide(allow: false)
+        }
+        return true
+    }
+    public func decide(allow: Bool) {
+        guard let offer = incomingOffer, let host = incomingHost, let respond = incomingRespond,
+              let identity = incomingIdentity, let card = incomingCard else { return }
+        incoming = nil; incomingOffer = nil; incomingRespond = nil
+        incomingIdentity = nil; incomingCard = nil; incomingHost = nil
+        do {
+            guard allow, !active else {
+                respond(try identity.sign(AudioReply(id: offer.id, from: card, to: offer.from.id, accepted: false, created: Date())))
+                return
+            }
+            let ephemeral = Curve25519.KeyAgreement.PrivateKey()
+            let keys = try AudioSessionCipher.keys(privateKey: ephemeral, remote: offer.ephemeralKey,
+                session: offer.id, source: offer.from.id, sink: card.id)
+            try io.startPlayback()
+            active = true; packets = 0; status = "Securing audio connection…"
+            let attempt = UUID(); generation = attempt
+            let reply = AudioReply(id: offer.id, from: card, to: offer.from.id, accepted: true,
+                ephemeralKey: ephemeral.publicKey.rawRepresentation.url64, created: Date())
+            respond(try identity.sign(reply))
+            let parameters = NWParameters.tcp
+            parameters.includePeerToPeer = true
+            let connection = NWConnection(host: NWEndpoint.Host(host), port: NWEndpoint.Port(rawValue: offer.port)!, using: parameters)
+            let channel = AudioMeshChannel(connection: connection, sendKey: keys.1, receiveKey: keys.0, session: offer.id, source: false)
+            self.channel = channel
+            channel.ready = { [weak self] in DispatchQueue.main.async {
+                guard let self, self.generation == attempt else { return }
+                self.status = "Listening to \(offer.from.name) · encrypted · local network"
+            } }
+            channel.audio = { [weak self] pcm in
+                self?.io.play(pcm)
+                DispatchQueue.main.async { [weak self] in
+                    guard let self, self.generation == attempt else { return }; self.packets += 1
+                }
+            }
+            channel.ended = { [weak self] error in DispatchQueue.main.async {
+                guard let self, self.generation == attempt else { return }
+                self.stop(reason: error?.localizedDescription ?? "Audio stopped")
+            } }
+            channel.start()
+        } catch { stop(reason: error.localizedDescription) }
+    }
+    public func stop(reason: String = "Audio stopped") {
+        generation = UUID(); active = false; status = reason
+        io.stop(); channel?.stop(); channel = nil
+        listener?.cancel(); listener = nil
+        candidates.forEach { $0.stop() }; candidates = []
+        pendingConnections.forEach { $0.cancel() }; pendingConnections = []
+        offer = nil; keys = nil; key = nil
+        if incoming != nil { decide(allow: false) }
+    }
+}

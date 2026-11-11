@@ -1,0 +1,12 @@
+.build/
+dist/
+.DS_Store
+.dev.vars
+.env
+.env.*
+.wrangler/
+
+# Never publish development signing identities.
+identity.json
+identity.json.lock
+.identity-*.tmp

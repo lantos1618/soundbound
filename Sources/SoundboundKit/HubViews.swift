@@ -733,14 +733,19 @@ private struct NewRoomView: View {
 private struct DetailPage<Content: View>: View {
     let title: String
     let subtitle: String
+    var showHeading = true
     @ViewBuilder var content: () -> Content
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 26) {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text(title).font(.system(size: 28, weight: .medium, design: .rounded))
-                    Text(subtitle).font(.subheadline).foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
+                if showHeading {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(title).font(.system(size: 28, weight: .medium, design: .rounded))
+                        if !subtitle.isEmpty {
+                            Text(subtitle).font(.subheadline).foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
                 }
                 content()
             }
@@ -996,7 +1001,7 @@ public struct AddFriendView: View {
 private struct SettingsView: View {
     @ObservedObject var store: HubStore
     var body: some View {
-        DetailPage(title: "Settings", subtitle: "Stay in control of what you share.") {
+        DetailPage(title: "Settings", subtitle: "", showHeading: false) {
             DetailSection(title: "Account") {
                 AppleAccountView()
             }
@@ -1022,5 +1027,8 @@ private struct SettingsView: View {
                     .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
         }.navigationTitle("Settings")
+        #if os(iOS)
+        .navigationBarTitleDisplayMode(.inline)
+        #endif
     }
 }

@@ -162,9 +162,11 @@ public struct AppleAccountView: View {
     public var body: some View {
         VStack(spacing: 12) {
             if account.isSignedIn {
-                Label(account.displayName ?? "Apple Account", systemImage: "person.crop.circle.fill").font(.headline)
+                Label(account.displayName ?? "Signed in with Apple", systemImage: "person.crop.circle.fill").font(.headline)
                 if let email = account.email { Text(email).font(.subheadline).foregroundStyle(.secondary) }
-                Text("Signed in on this device").font(.caption).foregroundStyle(.secondary)
+                if account.displayName != nil || account.email != nil {
+                    Text("Signed in on this device").font(.caption).foregroundStyle(.secondary)
+                }
                 Button("Sign out") { account.signOut() }.buttonStyle(.bordered)
             } else {
                 AppleAuthorizationButton(account: account)

@@ -30,7 +30,10 @@ final class RoomSyncTests: XCTestCase {
         owner.updateRoom(renamed)
         XCTAssertTrue(phone.mergeRoomLayouts(owner.ownedRoomLayouts(), from: ownerIdentity.id))
         XCTAssertEqual(phone.rooms.first?.name, "Office")
-        XCTAssertTrue(phone.mergeRoomLayouts([], from: ownerIdentity.id))
+        owner.deleteRoom(room.id)
+        XCTAssertTrue(owner.rooms.isEmpty)
+        XCTAssertTrue(owner.deviceRooms.isEmpty)
+        XCTAssertTrue(phone.mergeRoomLayouts(owner.ownedRoomLayouts(), from: ownerIdentity.id))
         XCTAssertTrue(phone.rooms.isEmpty)
         XCTAssertFalse(phone.deviceRooms.contains(room.id))
     }

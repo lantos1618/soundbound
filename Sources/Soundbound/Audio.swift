@@ -82,6 +82,7 @@ final class SoundModel: NSObject, ObservableObject {
     @Published var quietPrompts: Bool = UserDefaults.standard.object(forKey: "quietPrompts") as? Bool ?? true {
         didSet { UserDefaults.standard.set(quietPrompts, forKey: "quietPrompts") }
     }
+    var onTestStarted: ((String) -> Void)?
     var onDeparture: ((String) -> Void)?
     private var listeners: [(AudioObjectPropertyAddress, AudioObjectPropertyListenerBlock)] = []
     private var previouslyOnMac: Bool?
@@ -134,6 +135,7 @@ final class SoundModel: NSObject, ObservableObject {
             default: row.connection = .wired
             }
             row.systemOutputID = output?.id
+            row.systemInputID = input?.id
             row.hasInput = input != nil; row.hasOutput = output != nil
             row.selectedInput = selectedInput; row.selectedOutput = selectedOutput
             row.canDisconnect = device.bluetooth && paired.contains { matches(device, $0) }
@@ -412,6 +414,7 @@ final class SoundModel: NSObject, ObservableObject {
             engine.attach(player); engine.connect(player, to: engine.mainMixerNode, format: format)
             verificationEngine = engine; verificationPlayer = player; operationID = rowID(for: output)
             try engine.start(); player.scheduleBuffer(buffer); player.play()
+            onTestStarted?(rowID(for: output))
             message = "Playing a quiet test on \(output.name)."
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
                 guard let self, self.verificationEngine === engine else { return }

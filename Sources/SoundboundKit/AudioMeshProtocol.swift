@@ -21,11 +21,13 @@ struct AudioReply: Codable {
     var to: String
     var accepted: Bool
     var ephemeralKey: String?
+    var reason: AudioRejection? = nil
     var created: Date
 }
 public struct IncomingAudioRequest: Identifiable {
     public let id: String
     public let name: String
+    public var outputName: String? = nil
 }
 struct AudioWirePacket: Codable {
     var kind: String
@@ -83,5 +85,18 @@ struct AudioSessionCipher {
               packet.kind != "audio" || packet.pcm?.isEmpty == false else { throw AudioMeshError.invalid }
         received = packet.sequence
         return packet
+    }
+}
+
+enum AudioRejection: String, Codable, LocalizedError {
+    case busy, outputUnavailable, declined, playbackFailed, expired
+    var errorDescription: String? {
+        switch self {
+        case .busy: return "The receiving device is already playing shared audio."
+        case .outputUnavailable: return "That output is no longer available on the receiving device."
+        case .declined: return "The receiving device declined playback."
+        case .playbackFailed: return "The receiving device could not start playback. Open Soundbound there and check its audio output."
+        case .expired: return "The playback request expired. Open Soundbound on the receiving device and try again."
+        }
     }
 }

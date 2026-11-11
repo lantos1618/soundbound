@@ -13,6 +13,7 @@ public struct SoundboundRootView: View {
     let audioMessage: String?
     let onAudioAction: (LocalAudioAction, String) -> Void
     let onAudioVolume: (String, Double) -> Void
+    @Environment(\.scenePhase) private var scenePhase
     @State private var settings = false
     @State private var choosingOutput = false
     public init(store: HubStore, localAudioDevices: [LocalAudioDevice] = [], audioMessage: String? = nil,
@@ -62,6 +63,9 @@ public struct SoundboundRootView: View {
         }
         .onAppear {
             store.observeAudioDevices(localAudioDevices)
+            #if os(iOS)
+            PlaybackRequestNotifications.shared.attach(to: store.mesh)
+            #endif
             store.onApprovedDeviceMove = { name in
                 #if os(iOS)
                 choosingOutput = true
@@ -93,9 +97,11 @@ public struct SoundboundRootView: View {
                 Text("\(request.senderName) is asking to use \(request.deviceName) on \(store.name).")
             }
         }
+        .onChange(of: scenePhase) { phase in if phase != .active { store.activity.stopRecording() } }
         .onReceive(Timer.publish(every: 1, on: .main, in: .common).autoconnect()) { date in
             store.observeAudioDevices(localAudioDevices, now: date)
         }
+        .overlay { IncomingAudioApproval(mesh: store.mesh) }
         .overlay(alignment: .bottom) {
             if let notice = store.audioNotice {
                 Text(notice).font(.subheadline).padding(.horizontal, 16).padding(.vertical, 10)
@@ -124,22 +130,125 @@ private struct PhoneOutputPicker: UIViewRepresentable {
 }
 #endif
 
+private struct IncomingAudioApproval: View {
+    @ObservedObject var mesh: AudioMesh
+    var body: some View {
+        if let request = mesh.incoming {
+            ZStack {
+                Color.black.opacity(0.2).ignoresSafeArea().onTapGesture {}
+                VStack(spacing: 16) {
+                    Image(systemName: "speaker.wave.2").font(.system(size: 30)).foregroundStyle(.green)
+                    Text("Allow audio playback?").font(.headline)
+                    Text("\(request.name) wants to play on \(request.outputName ?? "this device").")
+                        .multilineTextAlignment(.center)
+                    HStack {
+                        Button("Decline") { mesh.decide(allow: false) }.buttonStyle(.bordered)
+                        Button("Allow audio") { mesh.decide(allow: true) }.buttonStyle(.borderedProminent)
+                    }
+                }.padding(24).frame(maxWidth: 350)
+                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 22))
+                    .padding(24)
+            }
+        }
+    }
+}
+
 private struct MeshActivity: View {
     @ObservedObject var mesh: AudioMesh
     var body: some View {
-        if let incoming = mesh.incoming {
-            VStack(alignment: .leading, spacing: 10) {
-                Text("\(incoming.name) wants to play audio here.").font(.headline)
+        VStack(alignment: .leading, spacing: 0) {
+            if mesh.active {
                 HStack {
-                    Button("Allow audio") { mesh.decide(allow: true) }.buttonStyle(.borderedProminent)
-                    Button("Decline") { mesh.decide(allow: false) }.buttonStyle(.bordered)
+                    Label(mesh.status, systemImage: "waveform").font(.subheadline)
+                    Spacer()
+                    Button("Stop", role: .destructive) { mesh.stop() }
+                }
+            } else if mesh.status != "No audio shared" {
+                Text(mesh.status).font(.subheadline).foregroundStyle(.secondary)
+            }
+        }
+    }
+}
+
+private struct AudioDeviceGlyph: View {
+    @ObservedObject var activity: DeviceAudioActivity
+    let id: String
+    let symbol: String
+    let name: String
+    var input: LocalAudioDevice? = nil
+    var enabled = true
+    let play: () -> Void
+    @GestureState private var contactActive = false
+    @State private var pressed = false
+    @State private var heldToRecord = false
+    @State private var pressToken = UUID()
+    private var mode: DeviceAudioActivity.Mode { activity.modes[id] ?? .idle }
+    private var color: Color { mode == .recording ? .red : mode == .chirping ? .green : mode == .waiting ? .orange : .secondary }
+    var body: some View {
+        ZStack {
+            Circle().fill(color.opacity(mode == .idle ? 0 : 0.12)).frame(width: 36, height: 36)
+            Image(systemName: symbol).font(.system(size: 21)).foregroundStyle(color)
+                .scaleEffect(1 + (activity.levels[id] ?? 0) * 0.3)
+        }.frame(width: 40, height: 40).contentShape(Circle())
+            .animation(.easeOut(duration: 0.08), value: activity.levels[id] ?? 0)
+            .opacity(enabled ? 1 : 0.4)
+            .gesture(DragGesture(minimumDistance: 0).updating($contactActive) { _, active, _ in active = true }.onChanged { value in
+                guard enabled else { return }
+                if !pressed {
+                    pressed = true; heldToRecord = false
+                    let token = UUID(); pressToken = token
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.22) {
+                        guard pressed, pressToken == token, let input else { return }
+                        heldToRecord = true; activity.beginRecording(input)
+                    }
+                }
+                if abs(value.translation.width) + abs(value.translation.height) > 35 {
+                    pressed = false; pressToken = UUID(); activity.endRecording(id)
+                }
+            }.onEnded { _ in
+                let shouldPlay = pressed && !heldToRecord && enabled
+                pressed = false; pressToken = UUID()
+                activity.endRecording(id)
+                if shouldPlay { play() }
+            })
+            .onChange(of: contactActive) { active in
+                if !active {
+                    DispatchQueue.main.async {
+                        if !contactActive { activity.endRecording(id); pressed = false; pressToken = UUID() }
+                    }
                 }
             }
-        } else if mesh.active {
-            HStack {
-                Label(mesh.status, systemImage: "waveform").font(.subheadline)
-                Spacer()
-                Button("Stop", role: .destructive) { mesh.stop() }
+            .accessibilityElement().accessibilityLabel(name + (mode == .recording ? ", recording" : mode == .chirping ? ", playing" : ""))
+            .accessibilityAddTraits(.isButton)
+            .accessibilityAction { if enabled { play() } }
+            .accessibilityAction(named: "Start recording") { if let input, enabled { activity.beginRecording(input) } }
+            .accessibilityAction(named: "Stop recording") { activity.endRecording(id) }
+            .help(input == nil ? "Tap to play a test sound" : "Hold to record; release to stop")
+            .onDisappear { activity.endRecording(id) }
+    }
+}
+
+private struct AudioStateLabel: View {
+    @ObservedObject var activity: DeviceAudioActivity
+    let id: String
+    let fallback: String
+    var body: some View {
+        let mode = activity.modes[id] ?? .idle
+        Text(mode == .recording ? "Recording" : mode == .chirping ? "Chirping" : mode == .waiting ? "Awaiting approval" : fallback)
+            .font(.caption).foregroundStyle(mode == .recording ? Color.red : mode == .chirping ? .green : mode == .waiting ? .orange : .secondary)
+    }
+}
+
+private struct RecordingReplayControl: View {
+    @ObservedObject var activity: DeviceAudioActivity
+    let id: String
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if activity.messageID == id, let message = activity.message {
+                Text(message).font(.caption).foregroundStyle(.secondary)
+            }
+            if activity.recordedID == id {
+                Button("Play recording") { activity.playRecording(id) }.font(.caption).buttonStyle(.plain)
             }
         }
     }
@@ -170,6 +279,7 @@ private struct DeviceDragHandle: View {
             .contentShape(Rectangle())
             .accessibilityLabel("Drag \(name) to a room")
             .help("Drag \(name) to a room")
+            .onDrag { NSItemProvider(object: id as NSString) }
 
     }
 }
@@ -186,17 +296,17 @@ private struct LocalAudioRow: View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 8) {
                 DeviceDragHandle(id: "audio:" + device.id, name: device.name)
-                Button { action(.testOutput, device.id) } label: {
-                    Image(systemName: device.icon).font(.system(size: 21, weight: .regular)).foregroundStyle(.secondary).frame(width: 36, height: 36)
-                }.buttonStyle(.plain).disabled(!device.hasOutput || !device.isAvailable || device.busy)
-                    .help(device.hasOutput ? "Play test sound on " + device.name : "Microphone input")
+                AudioDeviceGlyph(activity: store.activity, id: device.id, symbol: device.icon, name: device.name,
+                    input: device.hasInput ? device : nil, enabled: device.isAvailable && !device.busy && !store.mesh.active) {
+                    if device.hasOutput { action(.testOutput, device.id) }
+                }
                 VStack(alignment: .leading, spacing: 3) {
                     Text(device.name).font(.system(size: 14, weight: .medium))
                     Text(device.connectionLabel + " · " + device.detail).font(.caption).foregroundStyle(.secondary)
                 }
                 Spacer(minLength: 8)
                 if device.busy { ProgressView().controlSize(.small) }
-                Text(device.status).font(.caption).foregroundStyle(.secondary).multilineTextAlignment(.trailing)
+                AudioStateLabel(activity: store.activity, id: device.id, fallback: device.status).multilineTextAlignment(.trailing)
                 Button { showingSettings = true } label: {
                     Image(systemName: "gearshape").frame(width: 24, height: 24)
                 }.buttonStyle(.plain)
@@ -217,6 +327,7 @@ private struct LocalAudioRow: View {
                     Spacer(minLength: 0)
                 }.padding(.leading, 76)
             }
+            RecordingReplayControl(activity: store.activity, id: device.id).padding(.leading, 76)
             if device.awaitingTestAnswer {
                 HStack {
                     Text("Did you hear it in your headphones?").font(.caption)
@@ -324,6 +435,8 @@ private struct HomeDeviceRow: View {
     let name: String
     let owner: String
     let kind: String
+    let activity: DeviceAudioActivity
+    let activityID: String
     var nearby = false
     var isLocal = false
     var dragID: String? = nil
@@ -332,12 +445,9 @@ private struct HomeDeviceRow: View {
     var body: some View {
         HStack(spacing: 8) {
             if let dragID { DeviceDragHandle(id: dragID, name: name) }
-            Button { testAction?() } label: {
-                Image(systemName: kind == "mac" ? "laptopcomputer" : "iphone")
-                    .font(.system(size: 21, weight: .regular))
-                    .foregroundStyle(.secondary).frame(width: 36, height: 36)
-            }.buttonStyle(.plain).disabled(testAction == nil)
-                .help("Play test sound on " + name)
+            AudioDeviceGlyph(activity: activity, id: activityID,
+                symbol: kind == "mac" ? "laptopcomputer" : "iphone", name: name,
+                enabled: testAction != nil) { testAction?() }
             VStack(alignment: .leading, spacing: 3) {
                 Text(name).font(.system(size: 14, weight: .medium))
                 Text(owner).font(.caption).foregroundStyle(.secondary)
@@ -364,6 +474,7 @@ private struct HomeView: View {
     @State private var addingFriend = false
     @State private var adding = false
     @State private var roomSettings: AudioRoom?
+    @State private var deletingRoom: AudioRoom?
     @StateObject private var roomTest = RoomPlaybackTest()
     @State private var hoveredRoom: String?
     @State private var overDevices = false
@@ -384,6 +495,7 @@ private struct HomeView: View {
                     ForEach(store.requests) { request in
                         VStack(alignment: .leading, spacing: 8) {
                             Text("\(request.peer.name) wants to pair").font(.headline)
+                            Text("Pairing allows audio playback. It never turns on a microphone.").font(.caption).foregroundStyle(.secondary)
                             Text("Device fingerprint: \(request.peer.id.prefix(8).uppercased())")
                                 .font(.caption).foregroundStyle(.secondary)
                             HStack {
@@ -393,7 +505,7 @@ private struct HomeView: View {
                         }
                     }
                     VStack(spacing: 0) {
-                        HomeDeviceRow(name: store.name, owner: "You", kind: HubStore.kind, nearby: true, isLocal: true, dragID: store.deviceID, settingsAction: { showingDeviceSettings = true }, testAction: testLocalHost)
+                        HomeDeviceRow(name: store.name, owner: "You", kind: HubStore.kind, activity: store.activity, activityID: store.deviceID, nearby: true, isLocal: true, dragID: store.deviceID, settingsAction: { showingDeviceSettings = true }, testAction: testLocalHost)
                             .onDrop(of: [UTType.plainText], isTargeted: nil) { acceptHostDrop($0, hostID: store.deviceID) }
                             .contextMenu {
                                 ForEach(store.rooms) { room in
@@ -487,6 +599,10 @@ private struct HomeView: View {
                                     hoveredRoom == room.id ? Color.accentColor : Color.secondary.opacity(0.25),
                                     style: StrokeStyle(lineWidth: 1, dash: [5, 4])))
                         }.padding(18).frame(maxWidth: .infinity, alignment: .leading)
+                            .contextMenu {
+                                Button("Room settings") { roomSettings = room }.disabled(room.owner != store.deviceID)
+                                Button("Delete room", role: .destructive) { deletingRoom = room }.disabled(room.owner != store.deviceID)
+                            }
                             .overlay(dropOutline(active: hoveredRoom == room.id))
                             .contentShape(Rectangle())
                             .onDrop(of: [UTType.plainText], isTargeted: Binding(
@@ -524,6 +640,15 @@ private struct HomeView: View {
         }
         .sheet(isPresented: $adding) { NewRoomView(store: store) }
         .sheet(isPresented: $addingFriend) { AddFriendView(store: store) }
+        .confirmationDialog("Delete room?", isPresented: Binding(get: { deletingRoom != nil }, set: { if !$0 { deletingRoom = nil } }), titleVisibility: .visible) {
+            Button("Delete room", role: .destructive) {
+                if let room = deletingRoom { store.deleteRoom(room.id) }
+                deletingRoom = nil
+            }
+            Button("Cancel", role: .cancel) { deletingRoom = nil }
+        } message: {
+            Text("The devices stay paired. Only this room and its grouping are removed.")
+        }
         .sheet(item: $roomSettings) { room in
             NavigationStack {
                 RoomView(store: store, roomID: room.id)
@@ -611,19 +736,18 @@ private struct HomeView: View {
         let id = HubStore.remoteComponentID(peer: peer.id, component: component.id)
         return HStack(spacing: 8) {
             DeviceDragHandle(id: id, name: component.name)
-            Button { store.sendAudioTest(to: peer.id, outputID: component.id) } label: {
-                Image(systemName: component.icon).font(.system(size: 21)).foregroundStyle(.secondary)
-                    .frame(width: 36, height: 36)
-            }.buttonStyle(.plain).disabled(!component.hasOutput || !component.isAvailable || store.mesh.active)
-                .help("Play test sound on " + component.name)
+            AudioDeviceGlyph(activity: store.activity, id: id, symbol: component.icon, name: component.name,
+                enabled: component.hasOutput && component.isAvailable && !store.mesh.active) {
+                store.sendAudioTest(to: peer.id, outputID: component.id)
+            }
             VStack(alignment: .leading, spacing: 3) {
                 Text(component.name).font(.system(size: 14, weight: .medium))
                 Text(component.connectionLabel + " · " + peer.card.name + " · " + (component.hasInput && component.hasOutput ? "Input & output" : component.hasInput ? "Microphone" : "Audio output"))
                     .font(.caption).foregroundStyle(.secondary)
             }
             Spacer()
-            Text(component.selectedOutput || component.selectedInput ? "In use" : component.isAvailable ? "Available" : "Not connected")
-                .font(.caption).foregroundStyle(.secondary)
+            AudioStateLabel(activity: store.activity, id: id,
+                fallback: component.selectedOutput || component.selectedInput ? "In use" : component.isAvailable ? "Available" : "Not connected")
             Color.clear.frame(width: 24, height: 24)
         }
         .padding(.vertical, 10)
@@ -637,7 +761,7 @@ private struct HomeView: View {
     }
 
     private func peerRow(_ peer: KnownPeer) -> some View {
-        HomeDeviceRow(name: peer.card.name, owner: "Paired device", kind: peer.card.kind,
+        HomeDeviceRow(name: peer.card.name, owner: "Paired device", kind: peer.card.kind, activity: store.activity, activityID: "peer:" + peer.id,
             nearby: store.nearby.contains { $0.id == peer.id }, dragID: "peer:" + peer.id, testAction: { store.sendAudioTest(to: peer.id) })
             .onDrop(of: [UTType.plainText], isTargeted: nil) { acceptHostDrop($0, hostID: peer.id) }
             .contextMenu {
@@ -650,7 +774,7 @@ private struct HomeView: View {
             }
     }
     private func roomDeviceRow(stacked: Bool) -> some View {
-        HomeDeviceRow(name: store.name, owner: "You", kind: HubStore.kind,
+        HomeDeviceRow(name: store.name, owner: "You", kind: HubStore.kind, activity: store.activity, activityID: store.deviceID,
                       nearby: true, isLocal: true, dragID: store.deviceID, settingsAction: { showingDeviceSettings = true }, testAction: testLocalHost)
     }
 
@@ -909,7 +1033,7 @@ public struct AddFriendView: View {
             VStack(spacing: 20) {
                 VStack(spacing: 5) {
                     Text(scanning ? "Scan their code" : "Show them your code").font(.title2.weight(.semibold))
-                    Text(scanning ? "Point your camera at a Soundbound code." : "They scan. You approve.").font(.subheadline)
+                    Text(scanning ? "Point your camera at a Soundbound code." : "Pair once to allow playback.").font(.subheadline)
                 }.foregroundStyle(.white).multilineTextAlignment(.center)
                 #if os(iOS)
                 Button(scanning ? "Show my code" : "Scan a code") { scanning.toggle(); cameraError = nil; if scanning { store.setDiscovery(true) } }
@@ -1019,6 +1143,17 @@ private struct SettingsView: View {
                     Spacer()
                     Text(store.fingerprint).font(.system(.body, design: .monospaced))
                 }
+            }
+            #if os(iOS)
+            DetailSection(title: "Playback requests") {
+                PlaybackNotificationSettings()
+            }
+            #endif
+            DetailSection(title: "Paired devices") {
+                Toggle("Play audio from paired devices automatically", isOn: $store.automaticPairedPlayback)
+                    .toggleStyle(.switch)
+                Text("Pairing grants playback permission. Microphones still need an explicit hold or share action.")
+                    .font(.caption).foregroundStyle(.secondary)
             }
             DetailSection(title: "Nearby discovery") {
                 Toggle("Let nearby devices find me", isOn: Binding(get: { store.discovering }, set: { store.setDiscovery($0) }))

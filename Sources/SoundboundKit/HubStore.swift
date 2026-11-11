@@ -12,6 +12,9 @@ public final class HubStore: ObservableObject {
     @Published public private(set) var requests: [AccessRequest] = []
     @Published public private(set) var outgoing: Set<String> = []
     @Published public private(set) var discovering = false
+    @Published public var automaticPairedPlayback: Bool {
+        didSet { defaults.set(automaticPairedPlayback, forKey: "Soundbound.automaticPairedPlayback") }
+    }
     @Published public var notice: String?
     @Published public private(set) var discoveryStatus = "Discovery is off"
     @Published public private(set) var inviteLink = ""
@@ -36,6 +39,8 @@ public final class HubStore: ObservableObject {
     private let defaults: UserDefaults
     private let persistenceKey: String
     public let mesh = AudioMesh()
+    public let activity = DeviceAudioActivity()
+    private var activityObservation: AnyCancellable?
     @Published public internal(set) var deviceMoveRequest: DeviceMoveRequest?
     public var onApprovedDeviceMove: ((String) -> Void)?
     var moveReply: ((SignedEnvelope) -> Void)?
@@ -73,6 +78,7 @@ public final class HubStore: ObservableObject {
 
     public init(identity: Identity? = nil, defaults: UserDefaults = .standard) {
         self.defaults = defaults
+        self.automaticPairedPlayback = defaults.object(forKey: "Soundbound.automaticPairedPlayback") as? Bool ?? true
         self.persistenceKey = Identity.usesDevelopmentFile ? "SoundboundHub.development.v1" : "SoundboundHub.v1"
         self.identity = identity
         let savedData = defaults.data(forKey: persistenceKey) ?? defaults.data(forKey: "SoundboundHub.v1")
@@ -95,6 +101,12 @@ public final class HubStore: ObservableObject {
             if ProcessInfo.processInfo.arguments.contains("--mesh-diagnostics") { print("Soundbound discovery: \(value)") }
         }
         network.incoming = { [weak self] envelope, respond in self?.receive(envelope, respond: respond) }
+        mesh.onTestReceived = { [weak self] outputID in
+            guard let self, let id = outputID ?? self.reportedAudioDevices.first(where: { $0.selectedOutput })?.id else { return }
+            self.activity.chirp(id)
+            self.activity.chirp(self.deviceID)
+        }
+        activityObservation = mesh.$active.sink { [weak self] active in if !active { self?.activity.clearWaiting() } }
         mesh.request = { [weak self] envelope, endpoint, completion in
             self?.network.request(envelope, endpoint: endpoint, completion: completion)
         }
@@ -200,6 +212,10 @@ public final class HubStore: ObservableObject {
               let peer = nearby.first(where: { $0.id == id }) else {
             notice = "Pair this device and turn on Discover on both devices first."; return
         }
+        guard !mesh.active else { notice = "Finish the current audio request first."; return }
+        let key = outputID.map { Self.remoteComponentID(peer: id, component: $0) } ?? "peer:" + id
+        activity.waiting(key)
+        mesh.onTestStarted = { [weak self] in self?.activity.chirp(key); self?.activity.chirp("peer:" + id) }
         mesh.sendTestTone(to: peer, identity: identity, card: card, outputID: outputID)
     }
 
@@ -211,6 +227,24 @@ public final class HubStore: ObservableObject {
         rooms.append(AudioRoom(name: String(title.prefix(60)), region: String(place.prefix(60)), owner: deviceID, policy: policy, members: [deviceID]))
         save()
     }
+    public func deleteRoom(_ id: String) {
+        guard rooms.contains(where: { $0.id == id && $0.owner == deviceID }) else {
+            notice = "Delete this room on the device that created it."; return
+        }
+        rooms.removeAll { $0.id == id }
+        deviceRooms.remove(id)
+        if deviceRoom == id { deviceRoom = deviceRooms.sorted().first }
+        for key in Array(audioMemberships.keys) {
+            audioMemberships[key]?.remove(id)
+            if audioRooms[key] == id { audioRooms[key] = audioMemberships[key]?.sorted().first }
+        }
+        for key in Array(peerMemberships.keys) {
+            peerMemberships[key]?.remove(id)
+            if peerRooms[key] == id { peerRooms[key] = peerMemberships[key]?.sorted().first }
+        }
+        persist()
+    }
+
     public func updateRoom(_ room: AudioRoom) {
         guard room.owner == deviceID, let index = rooms.firstIndex(where: { $0.id == room.id }) else { return }
         var updated = room; updated.level = min(1, max(0, room.level))
@@ -371,7 +405,7 @@ public final class HubStore: ObservableObject {
                       abs(reply.created.timeIntervalSinceNow) < 120 else { throw InviteError.invalidSignature }
                 if reply.approved {
                     self.recordFriend(reply.peer)
-                    self.notice = "\(reply.peer.name) accepted. You’re now paired. Audio sharing still needs its own permission."
+                    self.notice = "\(reply.peer.name) accepted. You’re now paired for playback. Microphones stay under your control."
                 } else { self.notice = "\(peer.invitation.peer.name) declined the request." }
             } catch { self.notice = "The request expired or the other device disconnected. Try again when both are nearby." }
         }
@@ -379,7 +413,7 @@ public final class HubStore: ObservableObject {
     func receive(_ envelope: SignedEnvelope, respond: @escaping (SignedEnvelope) -> Void) {
         if receiveDeviceMove(envelope, respond: respond) { return }
         if answerInventory(envelope, respond: respond) { return }
-        if let identity, mesh.receive(envelope, nearby: nearby, friends: friends, identity: identity, card: card, devices: reportedAudioDevices, respond: respond) { return }
+        if let identity, mesh.receive(envelope, nearby: nearby, friends: friends, identity: identity, card: card, devices: reportedAudioDevices, autoApprove: automaticPairedPlayback, respond: respond) { return }
         guard let message = try? envelope.verified(as: JoinMessage.self), message.version == 1,
               message.peer.publicKey == envelope.signer, message.peer.id != deviceID,
               !message.peer.name.isEmpty, message.peer.name.count <= 60,

@@ -39,16 +39,25 @@ final class MeshAudioIO {
         }
         timer.resume()
     }
-    func startCapture(frame: @escaping (Data) -> Void) throws {
+    func startCapture(inputSystemID: UInt32? = nil, inputUID: String? = nil, frame: @escaping (Data) -> Void) throws {
         stop()
         #if os(iOS)
         let session = AVAudioSession.sharedInstance()
         try session.setCategory(.playAndRecord, mode: .voiceChat, options: [.allowBluetooth, .defaultToSpeaker])
+        if let inputUID {
+            guard let input = session.availableInputs?.first(where: {
+                $0.uid == inputUID || (inputUID == "builtin-microphone" && $0.portType == .builtInMic)
+            }) else { throw AudioMeshError.microphone }
+            try session.setPreferredInput(input)
+        }
         try session.setActive(true)
         #endif
         let engine = AVAudioEngine()
         self.engine = engine
         let input = engine.inputNode
+        #if os(macOS)
+        if let inputSystemID { try input.auAudioUnit.setDeviceID(inputSystemID) }
+        #endif
         let format = input.outputFormat(forBus: 0)
         guard format.sampleRate > 0, format.channelCount > 0,
               let pcm = AVAudioFormat(commonFormat: .pcmFormatInt16, sampleRate: 24_000, channels: 1, interleaved: false),

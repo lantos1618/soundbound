@@ -11,12 +11,14 @@ final class PhoneAudioModel: ObservableObject {
     private let testTone = MeshAudioIO()
     private var testGeneration = UUID()
     @Published var message: String?
+    var onTestStarted: ((String) -> Void)?
     func perform(_ action: LocalAudioAction, id: String) {
         guard case .testOutput = action, devices.contains(where: { $0.id == id && $0.hasOutput && $0.selectedOutput }) else { return }
         do {
             let generation = UUID(); testGeneration = generation
             try testPlayback.startPlayback(expectedOutputID: id)
             testTone.startTestTone { [weak self] in self?.testPlayback.play($0) }
+            onTestStarted?(id)
             message = "Playing test sound"
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) { [weak self] in
                 guard let self, self.testGeneration == generation else { return }
@@ -41,12 +43,17 @@ final class PhoneAudioModel: ObservableObject {
             device.connection = builtIn ? .builtIn : ([.bluetoothA2DP, .bluetoothHFP, .bluetoothLE].contains(port.portType) ? .bluetooth : .wired)
             return device
         }
-        let inputs = route.inputs.map { port -> LocalAudioDevice in
+        var inputs = route.inputs.map { port -> LocalAudioDevice in
             var device = LocalAudioDevice(id: "input:" + port.uid, name: port.portName,
                 icon: "mic", detail: "This iPhone · Microphone input", status: "Current route")
             device.hasInput = true; device.selectedInput = true
             device.connection = port.portType == .builtInMic ? .builtIn : (port.portType == .bluetoothHFP ? .bluetooth : .wired)
             return device
+        }
+        if inputs.isEmpty {
+            var microphone = LocalAudioDevice(id: "builtin-microphone", name: UIDevice.current.name + " Microphone", icon: "mic", detail: "This iPhone · Microphone input", status: "Hold to record")
+            microphone.hasInput = true; microphone.connection = .builtIn
+            inputs.append(microphone)
         }
         devices = outputs + inputs
     }
@@ -59,6 +66,7 @@ struct SoundboundMobileApp: App {
     var body: some Scene {
         WindowGroup {
             SoundboundRootView(store: store, localAudioDevices: audio.devices, audioMessage: audio.message, onAudioAction: { audio.perform($0, id: $1) })
+                .onAppear { audio.onTestStarted = { store.activity.chirp($0); store.activity.chirp(store.deviceID) } }
                 .onOpenURL { store.join(codeOrLink: $0.absoluteString) }
         }
     }

@@ -37,7 +37,7 @@ final class AudioMeshTests: XCTestCase {
         let offer = AudioOffer(id: UUID().uuidString, from: other, to: own.id,
             ephemeralKey: Curve25519.KeyAgreement.PrivateKey().publicKey.rawRepresentation.url64, port: 1234, created: Date())
         let mesh = AudioMesh()
-        XCTAssertTrue(mesh.receive(try stranger.sign(offer), nearby: [], friends: [], identity: identity, card: own) { _ in
+        XCTAssertTrue(mesh.receive(try stranger.sign(offer), nearby: [], friends: [], identity: identity, card: own, autoApprove: true) { _ in
             XCTFail("Unpaired sender should not receive a grant")
         })
         XCTAssertNil(mesh.incoming)
@@ -78,7 +78,9 @@ final class AudioMeshTests: XCTestCase {
                          identity: identity, card: own, devices: []) { response = $0 }
         XCTAssertNil(mesh.incoming)
         XCTAssertFalse(mesh.active)
-        XCTAssertFalse(try XCTUnwrap(response).verified(as: AudioReply.self).accepted)
+        let rejection = try XCTUnwrap(response).verified(as: AudioReply.self)
+        XCTAssertFalse(rejection.accepted)
+        XCTAssertEqual(rejection.reason, .outputUnavailable)
     }
 
     func testEncryptedLoopbackCarriesAudioAndStops() throws {

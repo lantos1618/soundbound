@@ -83,6 +83,7 @@ public struct LocalAudioDevice: Identifiable, Equatable, Codable {
     public var canTest = false
     public var awaitingTestAnswer = false
     public var systemOutputID: UInt32?
+    public var systemInputID: UInt32?
     public var volume: Double?
     public var busy = false
     public var connection: AudioConnection?

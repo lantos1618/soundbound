@@ -11,6 +11,8 @@ public final class AudioMesh: ObservableObject {
     @Published public private(set) var active = false
     @Published public private(set) var incoming: IncomingAudioRequest?
     @Published public private(set) var packets = 0
+    var onTestStarted: (() -> Void)?
+    var onTestReceived: ((String?) -> Void)?
     var sign: ((AudioOffer) throws -> SignedEnvelope)?
     var request: ((SignedEnvelope, LocalEndpoint, @escaping (Result<SignedEnvelope, Error>) -> Void) -> Void)?
     private var listener: NWListener?
@@ -88,7 +90,7 @@ public final class AudioMesh: ObservableObject {
                                       envelope.signer == peer.invitation.peer.publicKey,
                                       reply.from.publicKey == envelope.signer,
                                       abs(reply.created.timeIntervalSinceNow) < 60 else { throw AudioMeshError.invalid }
-                                guard reply.accepted, let remoteKey = reply.ephemeralKey else { throw AudioMeshError.denied }
+                                guard reply.accepted, let remoteKey = reply.ephemeralKey else { throw reply.reason ?? AudioRejection.declined }
                                 self.keys = try AudioSessionCipher.keys(privateKey: ephemeral, remote: remoteKey,
                                     session: offer.id, source: card.id, sink: peer.id)
                                 self.status = "Securing audio connection…"
@@ -121,11 +123,13 @@ public final class AudioMesh: ObservableObject {
                     let send: (Data) -> Void = { [weak self, weak candidate] pcm in
                         candidate?.sendAudio(pcm)
                         DispatchQueue.main.async {
-                            guard let self, self.generation == attempt else { return }; self.packets += 1
+                            guard let self, self.generation == attempt else { return }
+                    self.packets += 1
                         }
                     }
                     if offer.source == "test-tone" {
                         self.io.startTestTone(frame: send)
+                        self.onTestStarted?()
                         self.status = "Sending quiet test tone…"
                         DispatchQueue.main.asyncAfter(deadline: .now() + 1.4) { [weak self] in
                             guard let self, self.generation == attempt else { return }
@@ -148,7 +152,7 @@ public final class AudioMesh: ObservableObject {
     }
 
     func receive(_ signed: SignedEnvelope, nearby: [NearbyPeer], friends: [KnownPeer], identity: Identity, card: PeerCard,
-                 devices: [LocalAudioDevice] = [], respond: @escaping (SignedEnvelope) -> Void) -> Bool {
+                 devices: [LocalAudioDevice] = [], autoApprove: Bool = false, respond: @escaping (SignedEnvelope) -> Void) -> Bool {
         guard let offer = try? signed.verified(as: AudioOffer.self), offer.kind == "audio-offer" else { return false }
         seen = seen.filter { $0.value > Date().addingTimeInterval(-120) }
         guard [1, 2].contains(offer.version), (offer.outputID == nil || offer.version == 2), offer.from.publicKey == signed.signer, offer.to == card.id,
@@ -159,17 +163,17 @@ public final class AudioMesh: ObservableObject {
               let peer = nearby.first(where: { $0.id == offer.from.id }) else { return true }
         seen[offer.id] = Date()
         guard !active, incoming == nil else {
-            let reply = AudioReply(id: offer.id, from: card, to: offer.from.id, accepted: false, created: Date())
+            let reply = AudioReply(id: offer.id, from: card, to: offer.from.id, accepted: false, reason: .busy, created: Date())
             if let signed = try? identity.sign(reply) { respond(signed) }; return true
         }
         if let outputID = offer.outputID {
             guard let device = devices.first(where: { $0.id == outputID && $0.hasOutput && $0.isAvailable }) else {
-                if let reply = try? identity.sign(AudioReply(id: offer.id, from: card, to: offer.from.id, accepted: false, created: Date())) { respond(reply) }
+                if let reply = try? identity.sign(AudioReply(id: offer.id, from: card, to: offer.from.id, accepted: false, reason: .outputUnavailable, created: Date())) { respond(reply) }
                 return true
             }
             #if os(iOS)
             guard device.selectedOutput else {
-                if let reply = try? identity.sign(AudioReply(id: offer.id, from: card, to: offer.from.id, accepted: false, created: Date())) { respond(reply) }
+                if let reply = try? identity.sign(AudioReply(id: offer.id, from: card, to: offer.from.id, accepted: false, reason: .outputUnavailable, created: Date())) { respond(reply) }
                 return true
             }
             #endif
@@ -177,7 +181,11 @@ public final class AudioMesh: ObservableObject {
         } else { incomingOutputSystemID = nil }
         incomingOffer = offer; incomingHost = peer.endpoint.host
         incomingRespond = respond; incomingIdentity = identity; incomingCard = card
-        incoming = IncomingAudioRequest(id: offer.id, name: offer.from.name + (offer.source == "test-tone" ? " (test tone)" : ""))
+        if autoApprove {
+            decide(allow: true)
+            return true
+        }
+        incoming = IncomingAudioRequest(id: offer.id, name: offer.from.name, outputName: devices.first(where: { $0.id == offer.outputID })?.name)
         DispatchQueue.main.asyncAfter(deadline: .now() + 30) { [weak self] in
             guard self?.incoming?.id == offer.id else { return }; self?.decide(allow: false)
         }
@@ -189,8 +197,8 @@ public final class AudioMesh: ObservableObject {
         incoming = nil; incomingOffer = nil; incomingRespond = nil
         incomingIdentity = nil; incomingCard = nil; incomingHost = nil
         do {
-            guard allow, !active else {
-                respond(try identity.sign(AudioReply(id: offer.id, from: card, to: offer.from.id, accepted: false, created: Date())))
+            guard allow, !active, abs(offer.created.timeIntervalSinceNow) < 60 else {
+                respond(try identity.sign(AudioReply(id: offer.id, from: card, to: offer.from.id, accepted: false, reason: allow ? .expired : .declined, created: Date())))
                 return
             }
             let ephemeral = Curve25519.KeyAgreement.PrivateKey()
@@ -214,7 +222,9 @@ public final class AudioMesh: ObservableObject {
             channel.audio = { [weak self] pcm in
                 self?.io.play(pcm)
                 DispatchQueue.main.async { [weak self] in
-                    guard let self, self.generation == attempt else { return }; self.packets += 1
+                    guard let self, self.generation == attempt else { return }
+                    if self.packets == 0 && offer.source == "test-tone" { self.onTestReceived?(offer.outputID) }
+                    self.packets += 1
                 }
             }
             channel.ended = { [weak self] error in DispatchQueue.main.async {
@@ -222,7 +232,11 @@ public final class AudioMesh: ObservableObject {
                 self.stop(reason: error?.localizedDescription ?? "Audio stopped")
             } }
             channel.start()
-        } catch { stop(reason: error.localizedDescription) }
+        } catch {
+            if let rejection = try? identity.sign(AudioReply(id: offer.id, from: card, to: offer.from.id,
+                accepted: false, reason: .playbackFailed, created: Date())) { respond(rejection) }
+            stop(reason: error.localizedDescription)
+        }
     }
     public func stop(reason: String = "Audio stopped") {
         generation = UUID(); active = false; status = reason

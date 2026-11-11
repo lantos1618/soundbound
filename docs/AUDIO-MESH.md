@@ -36,3 +36,11 @@ Not yet implemented: STUN/ICE, TURN client transport, internet signaling, mesh f
 ## Output tests
 
 Tapping an output icon requests a test for that specific endpoint. Room tests visit available outputs sequentially; they are not synchronized playback. Targeted offers use protocol version 2 so older receivers cannot silently ignore the output selection. The receiver validates the endpoint before asking for approval. A Mac opens that Core Audio output directly; iOS rejects a target that is not its current output instead of choosing a different destination.
+
+## iPhone request visibility
+
+Incoming audio requests use a modal approval prompt. The sender keeps a visible outcome when the receiver declines, cannot start playback, or times out. iPhone notification permission supports request notifications while the process is alive, plus a bounded background grace period to respond. Active audio uses the audio background mode. This does not keep an idle app alive indefinitely and does not wake a suspended app: APNs signaling is not implemented yet.
+
+## Trusted playback and input checks
+
+Paired devices automatically accept playback by default; Settings can restore per-request approval. Unpaired identities cannot send audio. Pairing does not activate a microphone. Local input icons record only while held, stop on release/cancellation or after 30 seconds, and keep the clip in memory. Red input indicators follow measured PCM level; green indicators mark actual test transmission/playback start. The room test remains a sequence of one-to-one streams, not a many-source mixer.

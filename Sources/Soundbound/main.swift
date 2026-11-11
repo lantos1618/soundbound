@@ -8,6 +8,7 @@ struct DesktopHubView: View {
     var body: some View {
         SoundboundRootView(store: store, localAudioDevices: audio.localAudioDevices, audioMessage: audio.message,
             onAudioAction: { audio.perform($0, id: $1) }, onAudioVolume: { audio.setVolume($0, level: $1) })
+            .onAppear { audio.onTestStarted = { store.activity.chirp($0); store.activity.chirp(store.deviceID) } }
     }
 }
 

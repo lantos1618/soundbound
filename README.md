@@ -488,6 +488,11 @@ Add clock synchronization, playout scheduling, drift correction, and multi-speak
 | Synchronization | Report measured inter-speaker offset and drift before claiming synchronized playback. |
 | Power and longevity | Measure CPU, battery use, background behavior, and sustained playback over an extended session. |
 
+
+## Future research: IBLT and libp2p peer discovery
+
+[Research note: signed peer discovery and invertible Bloom lookup tables](https://github.com/lantos1618/soundbound/blob/main/docs/IBLT-PEER-DISCOVERY.md) preserves the Goodrich–Mitzenmacher paper, the compact set-reconciliation idea, and libp2p as a possible identity/discovery foundation. This is deferred research, not an implemented dependency. Signatures and scoped grants remain the authority for access; a Bloom/IBLT match never grants permission.
+
 ## References
 
 - [Apple: AVAudioRoutingArbiter](https://developer.apple.com/documentation/avfaudio/avaudioroutingarbiter)

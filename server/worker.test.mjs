@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {webcrypto} from 'node:crypto';
 import {handleRequest} from './worker.mjs';
 globalThis.crypto ??= webcrypto;
-const env = {SOUNDBOUND_ACCESS_TOKEN: 'development-test-token-at-least-32-characters',
+const env = {TURN_ENABLED: 'true', SOUNDBOUND_ACCESS_TOKEN: 'development-test-token-at-least-32-characters',
   TURN_KEY_ID: 'test-key', TURN_API_TOKEN: 'test-api-token'};
 function request(token = env.SOUNDBOUND_ACCESS_TOKEN, path = '/turn/credentials', method = 'POST') {
   return new Request(`https://example.invalid${path}`, {method, headers: {Authorization: `Bearer ${token}`}});
@@ -24,7 +24,7 @@ test('refuses an unconfigured issuer', async () => {
 test('issues short-lived relay credentials without exposing the API token', async () => {
   const result = await handleRequest(request(), env, async (url, options) => {
     assert.equal(url, 'https://rtc.live.cloudflare.com/v1/turn/keys/test-key/credentials/generate-ice-servers');
-    assert.equal(JSON.parse(options.body).ttl, 600);
+    assert.equal(JSON.parse(options.body).ttl, 60);
     assert.equal(options.headers.Authorization, `Bearer ${env.TURN_API_TOKEN}`);
     return Response.json({...credentials, sensitiveDebugField: env.TURN_API_TOKEN});
   });
@@ -49,4 +49,22 @@ test('rejects arbitrary relay endpoints', async () => {
 test('rejects unsupported method and path', async () => {
   assert.equal((await handleRequest(request(undefined, '/turn/credentials', 'GET'), env)).status, 405);
   assert.equal((await handleRequest(request(undefined, '/other'), env)).status, 404);
+});
+
+test('defaults to disabled and cannot issue credentials before spend control exists', async () => {
+  let called = false;
+  const result = await handleRequest(request(), {...env, TURN_ENABLED: undefined}, () => { called = true; });
+  assert.equal(result.status, 503);
+  assert.equal(called, false);
+});
+
+test('health states whether relay issuance is disabled', async () => {
+  const response = await handleRequest(request(undefined, '/health', 'GET'), {});
+  assert.equal((await response.json()).relayEnabled, false);
+});
+test('rejects oversized bearer input before upstream work', async () => {
+  let called = false;
+  const response = await handleRequest(request('x'.repeat(600)), env, () => { called = true; });
+  assert.equal(response.status, 401);
+  assert.equal(called, false);
 });

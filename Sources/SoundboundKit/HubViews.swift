@@ -145,61 +145,6 @@ private struct MeshActivity: View {
     }
 }
 
-private struct AudioMeshPanel: View {
-    @ObservedObject var store: HubStore
-    @ObservedObject var mesh: AudioMesh
-    @State private var selected = ""
-    var peers: [NearbyPeer] { store.nearby.filter { peer in store.friends.contains { $0.id == peer.id } } }
-    var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack {
-                Text("Live audio").font(.title2.weight(.medium))
-                Spacer()
-                Label("Local Wi-Fi", systemImage: "lock.shield").font(.caption).foregroundStyle(.secondary)
-            }
-            if let incoming = mesh.incoming {
-                Text("\(incoming.name) wants to play audio here.").font(.headline)
-                Text("Only allow devices you trust. Use headphones to avoid feedback.").font(.caption).foregroundStyle(.secondary)
-                HStack {
-                    Button("Allow audio") { mesh.decide(allow: true) }.buttonStyle(.borderedProminent)
-                    Button("Decline") { mesh.decide(allow: false) }.buttonStyle(.bordered)
-                }
-            }
-            if mesh.active {
-                HStack {
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text(mesh.status).font(.subheadline)
-                        Text("\(mesh.packets) audio packets").font(.caption).foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                    Button("Stop", role: .destructive) { mesh.stop() }.buttonStyle(.bordered)
-                }
-            } else {
-                if !store.discovering {
-                    Button("Find paired devices") { store.setDiscovery(true) }.buttonStyle(.bordered)
-                }
-                if peers.isEmpty {
-                    Text("Pair your other device using Add, then turn on Discover on both devices.")
-                        .font(.subheadline).foregroundStyle(.secondary)
-                } else {
-                    Picker("Send microphone to", selection: $selected) {
-                        Text("Choose a device").tag("")
-                        ForEach(peers) { Text($0.invitation.peer.name).tag($0.id) }
-                    }
-                    HStack {
-                        Button("Send test tone") { store.sendAudioTest(to: selected) }.buttonStyle(.bordered)
-                        Button { store.shareMicrophone(to: selected) } label: { Label("Share microphone", systemImage: "mic") }
-                            .buttonStyle(.borderedProminent)
-                    }.disabled(selected.isEmpty)
-                    Text("They must allow playback. Your microphone starts after approval; either device can stop.")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-                if mesh.status != "No audio shared" { Text(mesh.status).font(.caption).foregroundStyle(.secondary) }
-            }
-        }.padding(.vertical, 8)
-    }
-}
-
 private struct DeviceDragArea: ViewModifier {
     let id: String?
     let name: String
@@ -241,7 +186,10 @@ private struct LocalAudioRow: View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 8) {
                 DeviceDragHandle(id: "audio:" + device.id, name: device.name)
-                Image(systemName: device.icon).font(.system(size: 21, weight: .regular)).foregroundStyle(.secondary).frame(width: 36, height: 36)
+                Button { action(.testOutput, device.id) } label: {
+                    Image(systemName: device.icon).font(.system(size: 21, weight: .regular)).foregroundStyle(.secondary).frame(width: 36, height: 36)
+                }.buttonStyle(.plain).disabled(!device.hasOutput || !device.isAvailable || device.busy)
+                    .help(device.hasOutput ? "Play test sound on " + device.name : "Microphone input")
                 VStack(alignment: .leading, spacing: 3) {
                     Text(device.name).font(.system(size: 14, weight: .medium))
                     Text(device.connectionLabel + " · " + device.detail).font(.caption).foregroundStyle(.secondary)
@@ -380,13 +328,16 @@ private struct HomeDeviceRow: View {
     var isLocal = false
     var dragID: String? = nil
     var settingsAction: (() -> Void)? = nil
+    var testAction: (() -> Void)? = nil
     var body: some View {
         HStack(spacing: 8) {
             if let dragID { DeviceDragHandle(id: dragID, name: name) }
-            Image(systemName: kind == "mac" ? "laptopcomputer" : "iphone")
-                .font(.system(size: 21, weight: .regular))
-                .foregroundStyle(.secondary)
-                .frame(width: 36, height: 36)
+            Button { testAction?() } label: {
+                Image(systemName: kind == "mac" ? "laptopcomputer" : "iphone")
+                    .font(.system(size: 21, weight: .regular))
+                    .foregroundStyle(.secondary).frame(width: 36, height: 36)
+            }.buttonStyle(.plain).disabled(testAction == nil)
+                .help("Play test sound on " + name)
             VStack(alignment: .leading, spacing: 3) {
                 Text(name).font(.system(size: 14, weight: .medium))
                 Text(owner).font(.caption).foregroundStyle(.secondary)
@@ -413,7 +364,7 @@ private struct HomeView: View {
     @State private var addingFriend = false
     @State private var adding = false
     @State private var roomSettings: AudioRoom?
-    @State private var testingRoom: AudioRoom?
+    @StateObject private var roomTest = RoomPlaybackTest()
     @State private var hoveredRoom: String?
     @State private var overDevices = false
     var body: some View {
@@ -442,7 +393,7 @@ private struct HomeView: View {
                         }
                     }
                     VStack(spacing: 0) {
-                        HomeDeviceRow(name: store.name, owner: "You", kind: HubStore.kind, nearby: true, isLocal: true, dragID: store.deviceID, settingsAction: { showingDeviceSettings = true })
+                        HomeDeviceRow(name: store.name, owner: "You", kind: HubStore.kind, nearby: true, isLocal: true, dragID: store.deviceID, settingsAction: { showingDeviceSettings = true }, testAction: testLocalHost)
                             .onDrop(of: [UTType.plainText], isTargeted: nil) { acceptHostDrop($0, hostID: store.deviceID) }
                             .contextMenu {
                                 ForEach(store.rooms) { room in
@@ -492,21 +443,16 @@ private struct HomeView: View {
                     ForEach(store.rooms) { room in
                         VStack(alignment: .leading, spacing: 14) {
                             HStack(alignment: .firstTextBaseline) {
-                                Text(room.name).font(.headline)
+                                Button { testRoom(room) } label: {
+                                    Label(room.name, systemImage: "play.circle").font(.headline)
+                                }.buttonStyle(.plain).disabled(roomTest.active)
+                                    .help("Play a test on this room’s available speakers")
                                 Text(room.owner == store.deviceID ? room.region : "Synced · " + (store.friends.first(where: { $0.id == room.owner })?.card.name ?? "Paired device"))
                                     .font(.caption).foregroundStyle(.secondary)
                                 Spacer()
-                                Menu {
-                                    Button("Test sound…") { testingRoom = room }
-                                    Button("Room settings") { roomSettings = room }.disabled(room.owner != store.deviceID)
-                                    if room.owner == store.deviceID && !store.deviceRooms.contains(room.id) {
-                                        Button("Add this device here") { store.moveDevice(to: room.id) }
-                                    } else if room.owner == store.deviceID {
-                                        Button("Remove this device from room") { store.removeDevice(from: room.id) }
-                                    }
-                                } label: { Image(systemName: "ellipsis").frame(width: 24, height: 24) }
-                                .menuStyle(.borderlessButton).fixedSize()
-                                .accessibilityLabel("Options for \(room.name)")
+                                Button { roomSettings = room } label: { Image(systemName: "gearshape").frame(width: 24, height: 24) }
+                                    .buttonStyle(.plain).disabled(room.owner != store.deviceID)
+                                    .help(room.owner == store.deviceID ? "Room settings" : "Edit this room on the device that created it")
                             }
                             Divider()
                             VStack(spacing: 0) {
@@ -549,6 +495,13 @@ private struct HomeView: View {
                             )) { acceptDrop($0, roomID: room.id) }
                     }
                 }
+                if !roomTest.status.isEmpty {
+                    HStack {
+                        Text(roomTest.status).font(.caption).foregroundStyle(.secondary)
+                        Spacer()
+                        if roomTest.active { Button("Stop test") { roomTest.stop() } }
+                    }
+                }
                 MeshActivity(mesh: store.mesh)
                 FriendsSection(store: store, adding: $showingDeviceSettings)
             }
@@ -571,10 +524,6 @@ private struct HomeView: View {
         }
         .sheet(isPresented: $adding) { NewRoomView(store: store) }
         .sheet(isPresented: $addingFriend) { AddFriendView(store: store) }
-        .sheet(item: $testingRoom) { room in
-            RoomAudioTestView(store: store, mesh: store.mesh, room: room,
-                              devices: localAudioDevices, action: onAudioAction)
-        }
         .sheet(item: $roomSettings) { room in
             NavigationStack {
                 RoomView(store: store, roomID: room.id)
@@ -584,6 +533,23 @@ private struct HomeView: View {
             .frame(width: 580, height: 620)
             #endif
         }
+    }
+    private func testLocalHost() {
+        if let output = localAudioDevices.first(where: { $0.hasOutput && $0.selectedOutput }) { onAudioAction(.testOutput, output.id) }
+    }
+    private func testRoom(_ room: AudioRoom) {
+        var targets: [RoomTestTarget] = localAudioDevices.filter {
+            $0.hasOutput && $0.isAvailable && store.audioDevice($0.id, belongsTo: room.id)
+        }.map { .local(id: $0.id, name: $0.name) }
+        for peer in store.friends where store.nearby.contains(where: { $0.id == peer.id }) {
+            let wholeHost = store.peerMemberships[peer.id]?.contains(room.id) == true
+            let outputs = (store.peerAudioDevices[peer.id] ?? []).filter {
+                $0.hasOutput && $0.isAvailable && (wholeHost || store.audioMemberships[HubStore.remoteComponentID(peer: peer.id, component: $0.id)]?.contains(room.id) == true)
+            }
+            targets += outputs.map { .remote(peer: peer.id, output: $0.id, name: $0.name) }
+            if wholeHost && outputs.isEmpty { targets.append(.remote(peer: peer.id, output: nil, name: peer.card.name)) }
+        }
+        roomTest.start(targets, store: store) { onAudioAction(.testOutput, $0) }
     }
     private func dropOutline(active: Bool) -> some View {
         RoundedRectangle(cornerRadius: 18)
@@ -645,8 +611,11 @@ private struct HomeView: View {
         let id = HubStore.remoteComponentID(peer: peer.id, component: component.id)
         return HStack(spacing: 8) {
             DeviceDragHandle(id: id, name: component.name)
-            Image(systemName: component.icon).font(.system(size: 21)).foregroundStyle(.secondary)
-                .frame(width: 36, height: 36)
+            Button { store.sendAudioTest(to: peer.id, outputID: component.id) } label: {
+                Image(systemName: component.icon).font(.system(size: 21)).foregroundStyle(.secondary)
+                    .frame(width: 36, height: 36)
+            }.buttonStyle(.plain).disabled(!component.hasOutput || !component.isAvailable || store.mesh.active)
+                .help("Play test sound on " + component.name)
             VStack(alignment: .leading, spacing: 3) {
                 Text(component.name).font(.system(size: 14, weight: .medium))
                 Text(component.connectionLabel + " · " + peer.card.name + " · " + (component.hasInput && component.hasOutput ? "Input & output" : component.hasInput ? "Microphone" : "Audio output"))
@@ -669,7 +638,7 @@ private struct HomeView: View {
 
     private func peerRow(_ peer: KnownPeer) -> some View {
         HomeDeviceRow(name: peer.card.name, owner: "Paired device", kind: peer.card.kind,
-            nearby: store.nearby.contains { $0.id == peer.id }, dragID: "peer:" + peer.id)
+            nearby: store.nearby.contains { $0.id == peer.id }, dragID: "peer:" + peer.id, testAction: { store.sendAudioTest(to: peer.id) })
             .onDrop(of: [UTType.plainText], isTargeted: nil) { acceptHostDrop($0, hostID: peer.id) }
             .contextMenu {
                 ForEach(store.rooms) { room in
@@ -682,7 +651,7 @@ private struct HomeView: View {
     }
     private func roomDeviceRow(stacked: Bool) -> some View {
         HomeDeviceRow(name: store.name, owner: "You", kind: HubStore.kind,
-                      nearby: true, isLocal: true, dragID: store.deviceID, settingsAction: { showingDeviceSettings = true })
+                      nearby: true, isLocal: true, dragID: store.deviceID, settingsAction: { showingDeviceSettings = true }, testAction: testLocalHost)
     }
 
 }
@@ -700,67 +669,6 @@ private extension View {
         self.background(.regularMaterial, in: RoundedRectangle(cornerRadius: 18))
             .overlay(RoundedRectangle(cornerRadius: 18).strokeBorder(Color.primary.opacity(0.05)))
             .shadow(color: .black.opacity(0.025), radius: 8, y: 3)
-    }
-}
-
-private struct RoomAudioTestView: View {
-    @ObservedObject var store: HubStore
-    @ObservedObject var mesh: AudioMesh
-    let room: AudioRoom
-    let devices: [LocalAudioDevice]
-    let action: (LocalAudioAction, String) -> Void
-    @StateObject private var recording = RoomSoundTest()
-    @Environment(\.dismiss) private var dismiss
-    var body: some View {
-        NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 22) {
-                    Text(room.name).font(.title2.weight(.medium))
-                    Text("Choose a device for a quiet test tone.").font(.subheadline).foregroundStyle(.secondary)
-                    ForEach(devices.filter { $0.hasOutput && store.audioDevice($0.id, belongsTo: room.id) }) { device in
-                        HStack {
-                            Label(device.name, systemImage: device.icon)
-                            Spacer()
-                            Button("Test sound") { action(.testOutput, device.id) }.disabled(device.busy || mesh.active || recording.busy)
-                        }
-                    }
-                    ForEach(store.friends.filter { store.peerMemberships[$0.id]?.contains(room.id) == true }) { peer in
-                        HStack {
-                            Label(peer.card.name, systemImage: peer.card.kind == "mac" ? "laptopcomputer" : "iphone")
-                            Spacer()
-                            Button("Send test tone") { store.sendAudioTest(to: peer.id) }
-                                .disabled(mesh.active || recording.busy || !store.nearby.contains { $0.id == peer.id })
-                        }
-                    }
-                    if mesh.active {
-                        Text(mesh.status).font(.caption).foregroundStyle(.secondary)
-                        Button("Stop audio", role: .destructive) { mesh.stop() }
-                    }
-                    Text("Other devices must approve playback. Tests are sent to one device at a time.")
-                        .font(.caption).foregroundStyle(.secondary)
-                    Divider()
-                    AudioMeshPanel(store: store, mesh: mesh)
-                    Text("Check this microphone").font(.headline)
-                    Text("Record three seconds, then play it back on this device. Nothing is saved to disk or sent to the room.")
-                        .font(.subheadline).foregroundStyle(.secondary)
-                    HStack {
-                        Button(recording.busy ? "Working…" : "Record 3 seconds") { recording.record() }
-                            .disabled(recording.busy || mesh.active)
-                        if recording.hasRecording {
-                            Button("Play recording here") { recording.play() }.disabled(recording.busy || mesh.active)
-                        }
-                        if recording.busy { Button("Stop") { recording.stop() } }
-                    }.buttonStyle(.bordered)
-                    Text(recording.status).font(.caption).foregroundStyle(.secondary)
-                }.padding(24).frame(maxWidth: .infinity, alignment: .leading)
-            }
-            .navigationTitle("Room sound test")
-            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
-            .onDisappear { recording.clear() }
-        }
-        #if os(macOS)
-        .frame(width: 540, height: 500)
-        #endif
     }
 }
 
@@ -1090,14 +998,7 @@ private struct SettingsView: View {
     var body: some View {
         DetailPage(title: "Settings", subtitle: "Stay in control of what you share.") {
             DetailSection(title: "Account") {
-                HStack {
-                    Spacer()
-                    SignInWithAppleButton(.signIn, onRequest: { _ in }, onCompletion: { _ in })
-                        .frame(width: 220, height: 40).disabled(true)
-                    Spacer()
-                }
-                Text("Apple sign-in is coming later. You can pair devices locally without an account.")
-                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                AppleAccountView()
             }
             DetailSection(title: "Your device") {
                 VStack(alignment: .leading, spacing: 7) {

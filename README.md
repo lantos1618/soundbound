@@ -7,21 +7,23 @@ A native macOS and iOS app for managing audio devices and sharing sound with per
 ## What works
 
 - Discover local inputs, outputs, Bluetooth headphones, and nearby Soundbound devices.
+- Use the menu-bar quick controls to choose a headphone destination or room; open the full app for setup.
 - Select the Mac’s output or microphone and adjust supported hardware volume.
 - Pair devices using a compact nearby QR code card, an inline iPhone camera scanner, short codes, nearby discovery, and explicit approval.
+- Sign in with Apple in signed builds. This identifies the local installation; account-wide friends and room permissions are not connected yet.
 - Send a short test tone or share a microphone with one paired receiver.
 - Stop audio from either device. Microphone capture starts only after permission and receiver approval.
 - Organize local and paired devices into rooms. Local and paired devices can belong to multiple rooms. Inputs and outputs sit beneath their host device. Adding the host includes its attached components; individual components can also be added separately. Room definitions and layouts mirror from their creating device to nearby paired devices; edits stay on the creating device. Membership does not grant audio access.
 - Distinguish built-in, Bluetooth, Apple Continuity, wired, and virtual endpoints. Drag wireless headphones onto a host to request a move; built-in hardware stays attached. iPhone uses Apple’s output chooser after approval.
 - Configure per-device change confirmations, notifications, and removal after a sustained disconnect.
-- Test a room’s outputs and paired receivers, or record a three-second microphone check for local replay. Test recordings remain in memory until the panel closes.
+- Tap a device icon for a short test tone. Tap a room name to test its available outputs in sequence; remote playback still needs approval.
 
 ## Try audio sharing
 
 1. Open Soundbound on both devices and enable Discover. A shared Wi-Fi network is the simplest setup; Apple peer-to-peer discovery is also enabled.
 2. Tap **+** beside **Devices**, send a pairing request, and approve it on the other device. Compare the device fingerprint when pairing.
-3. Open a room’s menu → **Test sound**. Select a paired device and choose **Send test tone**.
-4. Approve playback on the receiver. For continuous audio, choose **Share microphone** and grant microphone access on the source.
+3. Tap an output device’s icon to send a short test tone, or tap a room name to test the room in sequence.
+4. Approve playback on the receiver. The current Home screen exposes test playback; microphone transport remains an engine capability.
 
 Use headphones to avoid acoustic feedback. This build shares one source with one receiver; it does not yet mix multiple sources or synchronize speakers.
 
@@ -50,7 +52,7 @@ open dist/Soundbound.app
 
 For iPhone, open `Apps/iOS/Soundbound.xcodeproj`, choose your development team and device, and run.
 
-Development builds keep their identity in a local, owner-only JSON file outside the repository. Release builds use Keychain. See [development setup](docs/DEVELOPMENT.md).
+Development builds keep their device signing identity in a local, owner-only JSON file outside the repository. Release builds use Keychain. Native Apple login requires the provisioned Xcode build; no app-specific password is needed. See [development setup](docs/DEVELOPMENT.md).
 
 ```sh
 swift test --disable-sandbox --build-system native
@@ -60,7 +62,7 @@ Tests cover routing verification, pairing consent, identity storage, encryption,
 
 ## Not implemented yet
 
-Account-based friendships and Apple sign-in/onboarding; internet signaling, STUN/ICE and TURN client transport; mesh forwarding, system-audio capture, Opus compression, and multi-speaker synchronization. Cloudflare Realtime activation and TURN keys are not configured. The included credential-server code is preparatory and is not used by the current audio path.
+Account-based friendships and account-wide room authorization; internet signaling, STUN/ICE and TURN client transport; mesh forwarding, system-audio capture, Opus compression, and multi-speaker synchronization. Cloudflare Realtime is activated, but no TURN key or deployed issuer is configured. Credential issuance is disabled by default because an enforceable account spending cap has not been established. The current audio path remains local. See [TURN cost controls](docs/TURN.md).
 
 Soundbound cannot prevent Apple’s automatic AirPods switching or remotely reassign another app’s iPhone audio session.
 

@@ -133,6 +133,7 @@ final class SoundModel: NSObject, ObservableObject {
             case kAudioDeviceTransportTypeVirtual, kAudioDeviceTransportTypeAggregate: row.connection = .virtual
             default: row.connection = .wired
             }
+            row.systemOutputID = output?.id
             row.hasInput = input != nil; row.hasOutput = output != nil
             row.selectedInput = selectedInput; row.selectedOutput = selectedOutput
             row.canDisconnect = device.bluetooth && paired.contains { matches(device, $0) }

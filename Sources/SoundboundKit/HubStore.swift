@@ -195,12 +195,12 @@ public final class HubStore: ObservableObject {
         mesh.shareMicrophone(to: peer, identity: identity, card: card)
     }
 
-    public func sendAudioTest(to id: String) {
+    public func sendAudioTest(to id: String, outputID: String? = nil) {
         guard let identity, friends.contains(where: { $0.id == id }),
               let peer = nearby.first(where: { $0.id == id }) else {
             notice = "Pair this device and turn on Discover on both devices first."; return
         }
-        mesh.sendTestTone(to: peer, identity: identity, card: card)
+        mesh.sendTestTone(to: peer, identity: identity, card: card, outputID: outputID)
     }
 
     public func addRoom(name: String, region: String, policy: JoinPolicy) {
@@ -379,7 +379,7 @@ public final class HubStore: ObservableObject {
     func receive(_ envelope: SignedEnvelope, respond: @escaping (SignedEnvelope) -> Void) {
         if receiveDeviceMove(envelope, respond: respond) { return }
         if answerInventory(envelope, respond: respond) { return }
-        if let identity, mesh.receive(envelope, nearby: nearby, friends: friends, identity: identity, card: card, respond: respond) { return }
+        if let identity, mesh.receive(envelope, nearby: nearby, friends: friends, identity: identity, card: card, devices: reportedAudioDevices, respond: respond) { return }
         guard let message = try? envelope.verified(as: JoinMessage.self), message.version == 1,
               message.peer.publicKey == envelope.signer, message.peer.id != deviceID,
               !message.peer.name.isEmpty, message.peer.name.count <= 60,

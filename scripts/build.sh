@@ -3,6 +3,21 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 export CLANG_MODULE_CACHE_PATH="$PWD/.build/ModuleCache"
 export SWIFTPM_MODULECACHE_OVERRIDE="$CLANG_MODULE_CACHE_PATH"
+# Native Sign in with Apple requires a provisioned Apple Development build.
+# Use SOUNDBOUND_SIGNED=0 only for an offline, ad-hoc build without Apple login.
+if [[ "${SOUNDBOUND_SIGNED:-1}" == "1" ]]; then
+  python3 scripts/generate-ios-project.py
+  CONFIGURATION=Debug
+  if [[ "${SOUNDBOUND_PRODUCTION:-0}" == "1" ]]; then CONFIGURATION=Release; fi
+  xcodebuild -project Apps/macOS/Soundbound.xcodeproj -scheme Soundbound \
+    -configuration "$CONFIGURATION" -destination 'platform=macOS' \
+    -derivedDataPath .build/mac-signed -allowProvisioningUpdates \
+    DEVELOPMENT_TEAM="${SOUNDBOUND_DEVELOPMENT_TEAM:-3QX8AT4S7W}" build
+  mkdir -p dist
+  ditto ".build/mac-signed/Build/Products/$CONFIGURATION/Soundbound.app" dist/Soundbound.app
+  printf 'Built signed %s\n' "$PWD/dist/Soundbound.app"
+  exit 0
+fi
 # Optimized development builds use a stable local JSON identity. Opt into
 # production Keychain storage with SOUNDBOUND_PRODUCTION=1.
 IDENTITY_FLAGS=()
@@ -18,6 +33,7 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
+<key>SoundboundAppleSignInConfigured</key><false/>
 <key>CFBundleExecutable</key><string>Soundbound</string>
 <key>CFBundleIdentifier</key><string>app.soundbound.mac</string>
 <key>CFBundleName</key><string>Soundbound</string>

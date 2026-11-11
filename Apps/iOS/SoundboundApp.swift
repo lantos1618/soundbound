@@ -7,6 +7,23 @@ import Combine
 final class PhoneAudioModel: ObservableObject {
     @Published var devices: [LocalAudioDevice] = []
     private var observer: NSObjectProtocol?
+    private let testPlayback = MeshAudioIO()
+    private let testTone = MeshAudioIO()
+    private var testGeneration = UUID()
+    @Published var message: String?
+    func perform(_ action: LocalAudioAction, id: String) {
+        guard case .testOutput = action, devices.contains(where: { $0.id == id && $0.hasOutput && $0.selectedOutput }) else { return }
+        do {
+            let generation = UUID(); testGeneration = generation
+            try testPlayback.startPlayback(expectedOutputID: id)
+            testTone.startTestTone { [weak self] in self?.testPlayback.play($0) }
+            message = "Playing test sound"
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) { [weak self] in
+                guard let self, self.testGeneration == generation else { return }
+                self.testTone.stop(); self.testPlayback.stop(); self.message = nil
+            }
+        } catch { message = error.localizedDescription }
+    }
     init() {
         refresh()
         observer = NotificationCenter.default.addObserver(forName: AVAudioSession.routeChangeNotification,
@@ -41,7 +58,7 @@ struct SoundboundMobileApp: App {
     @StateObject private var audio = PhoneAudioModel()
     var body: some Scene {
         WindowGroup {
-            SoundboundRootView(store: store, localAudioDevices: audio.devices)
+            SoundboundRootView(store: store, localAudioDevices: audio.devices, audioMessage: audio.message, onAudioAction: { audio.perform($0, id: $1) })
                 .onOpenURL { store.join(codeOrLink: $0.absoluteString) }
         }
     }

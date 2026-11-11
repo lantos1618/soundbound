@@ -73,14 +73,21 @@ final class MeshAudioIO {
         hasTap = true
         engine.prepare(); try engine.start()
     }
-    func startPlayback() throws {
+    func startPlayback(outputSystemID: UInt32? = nil, expectedOutputID: String? = nil) throws {
         stop()
         #if os(iOS)
         let session = AVAudioSession.sharedInstance()
         try session.setCategory(.playback, mode: .default, options: [.mixWithOthers])
         try session.setActive(true)
+        if let expectedOutputID, !session.currentRoute.outputs.contains(where: { $0.uid == expectedOutputID }) {
+            try? session.setActive(false, options: .notifyOthersOnDeactivation)
+            throw AudioMeshError.invalid
+        }
         #endif
         let engine = AVAudioEngine(), player = AVAudioPlayerNode()
+        #if os(macOS)
+        if let outputSystemID { try engine.outputNode.auAudioUnit.setDeviceID(outputSystemID) }
+        #endif
         self.engine = engine; self.player = player
         engine.attach(player)
         engine.connect(player, to: engine.mainMixerNode, format: wireFormat)
@@ -113,12 +120,13 @@ final class MeshAudioIO {
         }
     }
     func stop() {
+        let hadEngine = engine != nil
         toneTimer?.cancel(); toneTimer = nil
         if hasTap { engine?.inputNode.removeTap(onBus: 0); hasTap = false }
         playbackQueue.sync { playing = false; queuedFrames = 0; player?.stop(); player = nil }
         engine?.stop(); engine = nil
         #if os(iOS)
-        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        if hadEngine { try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation) }
         #endif
     }
 }

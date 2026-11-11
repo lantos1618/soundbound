@@ -62,6 +62,25 @@ final class AudioMeshTests: XCTestCase {
         XCTAssertFalse(try XCTUnwrap(response).verified(as: AudioReply.self).accepted)
         XCTAssertFalse(mesh.active)
     }
+    func testSpecificOutputMustExistBeforePrompting() throws {
+        let identity = try Identity(ephemeral: true), guest = try Identity(ephemeral: true)
+        let own = PeerCard(publicKey: identity.publicKey, name: "Me", kind: "mac")
+        let other = PeerCard(publicKey: guest.publicKey, name: "Friend", kind: "iphone")
+        let invitation = Invitation(peer: other, nonce: UUID().uuidString, expires: Date().addingTimeInterval(600))
+        let peer = NearbyPeer(invitation: invitation, link: "", endpoint: LocalEndpoint(host: "localhost", port: 1234))
+        var offer = AudioOffer(id: UUID().uuidString, from: other, to: own.id,
+            ephemeralKey: Curve25519.KeyAgreement.PrivateKey().publicKey.rawRepresentation.url64,
+            port: 1234, created: Date(), source: "test-tone", outputID: "missing-output")
+        offer.version = 2
+        let mesh = AudioMesh()
+        var response: SignedEnvelope?
+        _ = mesh.receive(try guest.sign(offer), nearby: [peer], friends: [KnownPeer(card: other, acceptedAt: Date())],
+                         identity: identity, card: own, devices: []) { response = $0 }
+        XCTAssertNil(mesh.incoming)
+        XCTAssertFalse(mesh.active)
+        XCTAssertFalse(try XCTUnwrap(response).verified(as: AudioReply.self).accepted)
+    }
+
     func testEncryptedLoopbackCarriesAudioAndStops() throws {
         let received = expectation(description: "Received encrypted audio")
         let sourceKey = SymmetricKey(size: .bits256), sinkKey = SymmetricKey(size: .bits256)

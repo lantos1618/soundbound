@@ -22,6 +22,7 @@ public final class AudioMesh: ObservableObject {
     private var offer: AudioOffer?
     private let io = MeshAudioIO()
     private var generation = UUID()
+    private var incomingOutputSystemID: UInt32?
     private var incomingOffer: AudioOffer?
     private var incomingHost: String?
     private var incomingRespond: ((SignedEnvelope) -> Void)?
@@ -48,13 +49,13 @@ public final class AudioMesh: ObservableObject {
             self.beginOffer(peer: peer, identity: identity, card: card, attempt: attempt)
         }
     }
-    func sendTestTone(to peer: NearbyPeer, identity: Identity, card: PeerCard) {
+    func sendTestTone(to peer: NearbyPeer, identity: Identity, card: PeerCard, outputID: String? = nil) {
         guard !active else { return }
         active = true; packets = 0
         let attempt = UUID(); generation = attempt
-        beginOffer(peer: peer, identity: identity, card: card, attempt: attempt, testTone: true)
+        beginOffer(peer: peer, identity: identity, card: card, attempt: attempt, testTone: true, outputID: outputID)
     }
-    private func beginOffer(peer: NearbyPeer, identity: Identity, card: PeerCard, attempt: UUID, testTone: Bool = false) {
+    private func beginOffer(peer: NearbyPeer, identity: Identity, card: PeerCard, attempt: UUID, testTone: Bool = false, outputID: String? = nil) {
         do {
             let ephemeral = Curve25519.KeyAgreement.PrivateKey()
             key = ephemeral
@@ -70,8 +71,10 @@ public final class AudioMesh: ObservableObject {
             listener.stateUpdateHandler = { [weak self, weak listener] state in
                 guard let self, self.generation == attempt else { return }
                 if case .ready = state, let port = listener?.port, self.offer == nil {
-                    let offer = AudioOffer(id: UUID().uuidString, from: card, to: peer.id,
-                        ephemeralKey: ephemeral.publicKey.rawRepresentation.url64, port: port.rawValue, created: Date(), source: testTone ? "test-tone" : "microphone")
+                    var offer = AudioOffer(id: UUID().uuidString, from: card, to: peer.id,
+                        ephemeralKey: ephemeral.publicKey.rawRepresentation.url64, port: port.rawValue, created: Date(), source: testTone ? "test-tone" : "microphone", outputID: outputID)
+                    // Version 2 prevents older receivers from ignoring a specific output target.
+                    if outputID != nil { offer.version = 2 }
                     self.offer = offer; self.status = "Waiting for \(peer.invitation.peer.name) to allow audio…"
                     do {
                         let signed = try identity.sign(offer)
@@ -145,10 +148,10 @@ public final class AudioMesh: ObservableObject {
     }
 
     func receive(_ signed: SignedEnvelope, nearby: [NearbyPeer], friends: [KnownPeer], identity: Identity, card: PeerCard,
-                 respond: @escaping (SignedEnvelope) -> Void) -> Bool {
+                 devices: [LocalAudioDevice] = [], respond: @escaping (SignedEnvelope) -> Void) -> Bool {
         guard let offer = try? signed.verified(as: AudioOffer.self), offer.kind == "audio-offer" else { return false }
         seen = seen.filter { $0.value > Date().addingTimeInterval(-120) }
-        guard offer.version == 1, offer.from.publicKey == signed.signer, offer.to == card.id,
+        guard [1, 2].contains(offer.version), (offer.outputID == nil || offer.version == 2), offer.from.publicKey == signed.signer, offer.to == card.id,
               offer.port > 0, ["microphone", "test-tone"].contains(offer.source), UUID(uuidString: offer.id) != nil,
               abs(offer.created.timeIntervalSinceNow) < 30, seen[offer.id] == nil, seen.count < 1000,
               Data(url64: offer.ephemeralKey)?.count == 32,
@@ -159,6 +162,19 @@ public final class AudioMesh: ObservableObject {
             let reply = AudioReply(id: offer.id, from: card, to: offer.from.id, accepted: false, created: Date())
             if let signed = try? identity.sign(reply) { respond(signed) }; return true
         }
+        if let outputID = offer.outputID {
+            guard let device = devices.first(where: { $0.id == outputID && $0.hasOutput && $0.isAvailable }) else {
+                if let reply = try? identity.sign(AudioReply(id: offer.id, from: card, to: offer.from.id, accepted: false, created: Date())) { respond(reply) }
+                return true
+            }
+            #if os(iOS)
+            guard device.selectedOutput else {
+                if let reply = try? identity.sign(AudioReply(id: offer.id, from: card, to: offer.from.id, accepted: false, created: Date())) { respond(reply) }
+                return true
+            }
+            #endif
+            incomingOutputSystemID = device.systemOutputID
+        } else { incomingOutputSystemID = nil }
         incomingOffer = offer; incomingHost = peer.endpoint.host
         incomingRespond = respond; incomingIdentity = identity; incomingCard = card
         incoming = IncomingAudioRequest(id: offer.id, name: offer.from.name + (offer.source == "test-tone" ? " (test tone)" : ""))
@@ -180,7 +196,7 @@ public final class AudioMesh: ObservableObject {
             let ephemeral = Curve25519.KeyAgreement.PrivateKey()
             let keys = try AudioSessionCipher.keys(privateKey: ephemeral, remote: offer.ephemeralKey,
                 session: offer.id, source: offer.from.id, sink: card.id)
-            try io.startPlayback()
+            try io.startPlayback(outputSystemID: incomingOutputSystemID, expectedOutputID: offer.outputID)
             active = true; packets = 0; status = "Securing audio connection…"
             let attempt = UUID(); generation = attempt
             let reply = AudioReply(id: offer.id, from: card, to: offer.from.id, accepted: true,

@@ -11,203 +11,6 @@ struct DesktopHubView: View {
     }
 }
 
-struct DeviceIcon: View {
-    var phone = false
-    var body: some View {
-        Image(systemName: phone ? "iphone" : "laptopcomputer")
-            .resizable().scaledToFit()
-            .frame(width: phone ? 18 : 34, height: phone ? 30 : 25)
-            .frame(width: 44, height: 44)
-            .accessibilityLabel(phone ? "iPhone" : "Mac")
-    }
-}
-
-struct SetupStep: View {
-    let number: Int
-    let text: String
-    var body: some View {
-        HStack(alignment: .top, spacing: 8) {
-            Text("\(number).")
-                .foregroundStyle(.secondary)
-                .frame(width: 13, alignment: .trailing)
-            Text(text).frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .font(.system(size: 12))
-        .fixedSize(horizontal: false, vertical: true)
-    }
-}
-
-struct SetupDevice: View {
-    let phone: Bool
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .center, spacing: 10) {
-                DeviceIcon(phone: phone)
-                Text(phone ? "On your iPhone" : "On your Mac")
-                    .font(.system(size: 14, weight: .medium))
-            }
-            if phone {
-                SetupStep(number: 1, text: "Open Settings on your iPhone.")
-                SetupStep(number: 2, text: "Tap your AirPods near the top.")
-                SetupStep(number: 3, text: "Tap ‘Connect to This iPhone’, then choose ‘When Last Connected to This iPhone’.")
-            } else {
-                SetupStep(number: 1, text: "Click ‘Open Mac settings’ below.")
-                SetupStep(number: 2, text: "Click the info button ⓘ beside your AirPods.")
-                SetupStep(number: 3, text: "Find ‘Connect to This Mac’ and choose ‘When Last Connected to This Mac’.")
-            }
-        }
-    }
-}
-
-struct PossessionButton: View {
-    let phone: Bool
-    let title: String
-    let detail: String
-    var selected = false
-    let action: () -> Void
-    var body: some View {
-        Button(action: action) {
-            HStack(spacing: 10) {
-                DeviceIcon(phone: phone)
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(title).font(.system(size: 14, weight: .medium))
-                    Text(detail).font(.system(size: 11)).foregroundStyle(.secondary)
-                }
-                Spacer(minLength: 0)
-                if selected { Image(systemName: "checkmark").font(.system(size: 12, weight: .medium)) }
-            }
-            .padding(10)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color.primary.opacity(selected ? 0.07 : 0.03))
-            .clipShape(RoundedRectangle(cornerRadius: 10))
-            .contentShape(Rectangle())
-        }.buttonStyle(.plain)
-    }
-}
-
-struct MenuView: View {
-    @ObservedObject var model: SoundModel
-    var maximumHeight: CGFloat = 560
-    var onHeightChange: (CGFloat) -> Void = { _ in }
-    @AppStorage("manualSetupAcknowledged") private var setupAcknowledged = false
-    @State private var showSetup = false
-    private var height: CGFloat { min(showSetup ? 560 : 470, maximumHeight) }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            HStack(alignment: .firstTextBaseline) {
-                Text("soundbound").font(.system(size: 19, weight: .medium, design: .rounded))
-                Spacer()
-                if showSetup {
-                    Button("Done") { showSetup = false }
-                        .buttonStyle(.plain).font(.system(size: 12, weight: .medium))
-                } else {
-                    Text("SOUND STAYS HERE").font(.system(size: 8, weight: .medium)).tracking(1.1).foregroundStyle(.secondary)
-                }
-            }
-            if showSetup {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 18) {
-                        Text("Setup").font(.system(size: 17, weight: .medium))
-                        Text("Choose your headphones")
-                            .font(.system(size: 12, weight: .medium))
-                        if model.paired.isEmpty {
-                            ForEach(model.outputs.filter { $0.bluetooth }) { output in
-                                Button { model.track(output) } label: {
-                                    HStack {
-                                        Text(output.name)
-                                        Spacer()
-                                        if model.targetOutput?.uid == output.uid { Image(systemName: "checkmark") }
-                                    }
-                                }.disabled(model.busy)
-                            }
-                            if !model.hasHeadphones {
-                                Text("Connect your AirPods in Bluetooth settings first, then reopen this menu.")
-                                    .font(.system(size: 12)).foregroundStyle(.secondary)
-                            }
-                        } else {
-                            ForEach(model.paired, id: \.addressString) { device in
-                                Button { model.track(device) } label: {
-                                    HStack {
-                                        Text(device.name ?? "Headphones")
-                                        Spacer()
-                                        if model.isTracked(device) { Image(systemName: "checkmark") }
-                                    }.padding(.vertical, 4)
-                                }.buttonStyle(.plain).disabled(model.busy)
-                            }
-                        }
-                        Divider()
-                        Text("Stop surprise switches")
-                            .font(.system(size: 15, weight: .medium))
-                        Text("Do this once on both devices. Put your AirPods in your ears and connect them to the device you’re setting up.")
-                            .font(.system(size: 12)).foregroundStyle(.secondary)
-                        SetupDevice(phone: false)
-                        Button("Open Mac settings") {
-                            NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.BluetoothSettings")!)
-                        }
-                        SetupDevice(phone: true)
-                        Text("If you see ‘Audio & Routing’, open it to find the setting.")
-                            .font(.system(size: 11)).foregroundStyle(.secondary)
-                        Button(setupAcknowledged ? "Settings marked as done ✓" : "I’ve changed both settings") {
-                            setupAcknowledged = true
-                        }
-                        Divider()
-                        Toggle("Tell me when headphones leave this Mac", isOn: $model.quietPrompts)
-                            .font(.system(size: 12)).toggleStyle(.switch).controlSize(.mini)
-                        Text("Soundbound can connect and release headphones on this Mac. To connect them to iPhone, open Control Center on your phone, tap AirPlay, then choose your AirPods.")
-                            .font(.system(size: 12)).foregroundStyle(.secondary)
-                    }
-                    .fixedSize(horizontal: false, vertical: true)
-                    .padding(.bottom, 6)
-                }
-            } else {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(model.headphoneName).font(.system(size: 18, weight: .medium)).lineLimit(1)
-                    HStack(spacing: 6) {
-                        Circle().fill(model.hasVerifiedSound ? Color.green : Color.secondary).frame(width: 5, height: 5)
-                        Text(model.ownershipDescription).font(.system(size: 12)).foregroundStyle(.secondary)
-                    }
-                }
-                VStack(spacing: 8) {
-                    PossessionButton(phone: false, title: "Use on this Mac", detail: model.hasVerifiedSound ? "Sound test passed" : "Request connection · then verify", selected: model.hasVerifiedSound) {
-                        model.useOnMac()
-                    }
-                    PossessionButton(phone: true, title: "Release for iPhone", detail: "Disconnect from this Mac") {
-                        model.releaseForPhone()
-                    }
-                }.disabled(model.busy || !model.hasHeadphones)
-                if model.connectionCheck.phase == .awaitingAnswer {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Did you hear it through your AirPods?").font(.system(size: 12, weight: .medium))
-                        HStack {
-                            Button("Yes, in my AirPods") { model.confirmSound(heard: true) }
-                            Button("No") { model.confirmSound(heard: false) }
-                        }.font(.system(size: 11))
-                    }
-                } else {
-                    Button("Test connection") { model.testSound() }
-                        .font(.system(size: 12)).disabled(model.busy || !model.hasHeadphones)
-                        .help("Plays a short sound through the selected headphones. Confirm you heard it before a checkmark appears.")
-                }
-                if let message = model.message {
-                    Text(message).font(.system(size: 11)).foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                if model.busy { ProgressView().controlSize(.small) }
-                Spacer(minLength: 0)
-                HStack {
-                    Button("Setup") { showSetup = true }
-                    Spacer()
-                    Button("Quit") { NSApp.terminate(nil) }
-                }.buttonStyle(.plain).font(.system(size: 12)).foregroundStyle(.secondary)
-            }
-        }
-        .padding(22)
-        .frame(width: 340, height: height)
-        .onChange(of: showSetup) { _ in onHeightChange(height) }
-    }
-}
-
 struct ToastView: View {
     let name: String
     let reconnect: () -> Void
@@ -234,12 +37,13 @@ struct ToastView: View {
     }
 }
 
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let model = SoundModel()
     private let hub = HubStore()
     private var hubWindow: NSWindow?
     private var item: NSStatusItem!
-    private let popover = NSPopover()
+    private let quickMenu = NSMenu()
+    private var quickHeadphoneID: String?
     private var toast: NSPanel?
     private var dismissal: DispatchWorkItem?
 
@@ -260,10 +64,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         item.button?.imageScaling = .scaleNone
         item.button?.setAccessibilityLabel("Soundbound")
         item.button?.toolTip = "Soundbound — sound stays here"
-        item.button?.target = self
-        item.button?.action = #selector(showHub)
-        popover.behavior = .transient
-        popover.animates = false
+        quickMenu.delegate = self
+        quickMenu.autoenablesItems = false
+        item.menu = quickMenu
+        menuNeedsUpdate(quickMenu)
         NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(woke), name: NSWorkspace.didWakeNotification, object: nil)
         DispatchQueue.main.async { [weak self] in self?.showHub() }
     }
@@ -275,6 +79,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let about = NSMenuItem(title: "About Soundbound", action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
         about.target = NSApp
         appMenu.addItem(about)
+        let quick = NSMenuItem(title: "Quick controls", action: #selector(toggleMenu), keyEquivalent: "m")
+        quick.keyEquivalentModifierMask = [.command, .shift]
+        quick.target = self
+        appMenu.addItem(quick)
         appMenu.addItem(.separator())
         let quit = NSMenuItem(title: "Quit Soundbound", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         quit.target = NSApp
@@ -307,40 +115,96 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func showHub() {
         if hubWindow == nil {
-            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1020, height: 720), styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
+            let available = (NSScreen.main?.visibleFrame.size ?? NSSize(width: 1440, height: 1080))
+            let size = NSSize(width: min(1180, available.width * 0.92), height: min(960, available.height * 0.92))
+            let window = NSWindow(contentRect: NSRect(origin: .zero, size: size), styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
             window.title = "Soundbound"
             window.titleVisibility = .hidden
             window.titlebarAppearsTransparent = true
             window.isReleasedWhenClosed = false
             window.contentViewController = NSHostingController(rootView: DesktopHubView(store: hub, audio: model))
-            window.center()
+            if !window.setFrameUsingName("SoundboundMainWindow.v2") { window.center() }
+            window.setFrameAutosaveName("SoundboundMainWindow.v2")
             hubWindow = window
         }
         NSApp.activate(ignoringOtherApps: true)
         hubWindow?.makeKeyAndOrderFront(nil)
     }
 
-    @objc private func toggleMenu() {
-        if popover.isShown { popover.performClose(nil) }
-        else { showMenu() }
-    }
+    @objc private func toggleMenu() { DispatchQueue.main.async { [weak self] in self?.showMenu() } }
 
-    private func showMenu() {
+    private var quickHeadphones: [LocalAudioDevice] { model.localAudioDevices.filter { $0.connection == .bluetooth } }
+    private var quickHeadphone: LocalAudioDevice? { quickHeadphones.first { $0.id == quickHeadphoneID } ?? quickHeadphones.first }
+
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        guard menu === quickMenu else { return }
         model.refresh()
-        guard let button = item.button,
-              let screen = button.window?.screen ?? NSScreen.main else { return }
-        // Constrain the hosted content before asking AppKit to position it.
-        // The old unconstrained content could exceed the usable screen height.
-        let maximumHeight = min(CGFloat(560), screen.visibleFrame.height - 48)
-        let height = min(CGFloat(470), maximumHeight)
-        let controller = NSHostingController(rootView: MenuView(model: model, maximumHeight: maximumHeight) { [weak self] height in
-            self?.popover.contentSize = NSSize(width: 340, height: height)
-        })
-        controller.preferredContentSize = NSSize(width: 340, height: height)
-        popover.contentViewController = controller
-        popover.contentSize = NSSize(width: 340, height: height)
-        NSApp.activate(ignoringOtherApps: true)
-        popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+        quickMenu.removeAllItems()
+        func add(_ title: String, _ action: Selector? = nil, value: String? = nil, enabled: Bool = true, checked: Bool = false) -> NSMenuItem {
+            let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
+            item.target = self; item.representedObject = value; item.isEnabled = enabled
+            item.state = checked ? .on : .off
+            quickMenu.addItem(item)
+            return item
+        }
+        if let headphone = quickHeadphone {
+            if quickHeadphones.count > 1 {
+                let selector = add(headphone.name)
+                let choices = NSMenu()
+                for device in quickHeadphones {
+                    let choice = NSMenuItem(title: device.name, action: #selector(selectQuickHeadphone(_:)), keyEquivalent: "")
+                    choice.target = self; choice.representedObject = device.id
+                    choice.state = device.id == headphone.id ? .on : .off
+                    choices.addItem(choice)
+                }
+                selector.submenu = choices
+            } else { _ = add(headphone.name, enabled: false) }
+            _ = add(headphone.status, enabled: false)
+            quickMenu.addItem(.separator())
+            _ = add("Use on " + hub.name, #selector(quickDestination(_:)), value: hub.deviceID, enabled: !headphone.busy, checked: headphone.selectedOutput)
+            for peer in hub.friends {
+                let online = hub.nearby.contains { $0.id == peer.id }
+                _ = add("Request on " + peer.card.name + (online ? "" : " (offline)"), #selector(quickDestination(_:)), value: peer.id, enabled: online && !headphone.busy)
+            }
+            let roomItem = add("Rooms")
+            let roomMenu = NSMenu()
+            for room in hub.rooms {
+                let choice = NSMenuItem(title: room.name, action: #selector(quickRoom(_:)), keyEquivalent: "")
+                choice.target = self; choice.representedObject = room.id
+                choice.state = hub.audioMemberships[headphone.id]?.contains(room.id) == true ? .on : .off
+                choice.isEnabled = room.owner == hub.deviceID
+                roomMenu.addItem(choice)
+            }
+            if !hub.rooms.isEmpty { roomMenu.addItem(.separator()) }
+            let setup = NSMenuItem(title: "Room setup…", action: #selector(showHub), keyEquivalent: "")
+            setup.target = self; roomMenu.addItem(setup)
+            roomItem.submenu = roomMenu
+        } else {
+            _ = add("No headphones found", enabled: false)
+            _ = add("Bluetooth settings…", #selector(openBluetoothSettings))
+        }
+        quickMenu.addItem(.separator())
+        _ = add("Open Soundbound", #selector(showHub))
+        _ = add("Quit Soundbound", #selector(quitSoundbound))
+    }
+    @objc private func selectQuickHeadphone(_ sender: NSMenuItem) { quickHeadphoneID = sender.representedObject as? String }
+    @objc private func quickDestination(_ sender: NSMenuItem) {
+        guard let headphone = quickHeadphone, let host = sender.representedObject as? String else { return }
+        if host == hub.deviceID { model.perform(.connect, id: headphone.id) }
+        else { hub.requestDeviceMove(headphone, to: host, from: hub.name) }
+    }
+    @objc private func quickRoom(_ sender: NSMenuItem) {
+        guard let headphone = quickHeadphone, let room = sender.representedObject as? String else { return }
+        if hub.audioMemberships[headphone.id]?.contains(room) == true { hub.removeAudioDevice(headphone.id, from: room) }
+        else { hub.moveAudioDevice(headphone.id, to: room) }
+    }
+    @objc private func openBluetoothSettings() { NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.BluetoothSettings")!) }
+    @objc private func quitSoundbound() { NSApp.terminate(nil) }
+    private func showMenu() {
+        menuNeedsUpdate(quickMenu)
+        // Use the click location so Quick controls also works when macOS has
+        // hidden the status item behind other menu-bar extras.
+        quickMenu.popUp(positioning: nil, at: NSEvent.mouseLocation, in: nil)
     }
 
     private func showEventToast(_ message: String) {
@@ -376,7 +240,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.dismissal?.cancel()
             self?.toast?.orderOut(nil)
             self?.model.reconnect()
-            if self?.popover.isShown != true { self?.showMenu() }
+            self?.showMenu()
         })
         let screen = item.button?.window?.screen ?? NSScreen.main
         if let frame = screen?.visibleFrame {

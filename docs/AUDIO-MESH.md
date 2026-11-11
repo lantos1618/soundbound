@@ -32,3 +32,7 @@ Automated tests cover encryption/key agreement, tamper/replay/wrong-session reje
 Physical Mac-to-iPhone audibility must be verified separately. No claim of completed hardware testing is implied by the loopback test.
 
 Not yet implemented: STUN/ICE, TURN client transport, internet signaling, mesh forwarding, Opus compression, system-audio capture, echo cancellation, or synchronized multi-speaker playback. The Cloudflare credential issuer remains separate and needs an activated TURN account plus a WebRTC/ICE media transport before it can relay this stream.
+
+## Output tests
+
+Tapping an output icon requests a test for that specific endpoint. Room tests visit available outputs sequentially; they are not synchronized playback. Targeted offers use protocol version 2 so older receivers cannot silently ignore the output selection. The receiver validates the endpoint before asking for approval. A Mac opens that Core Audio output directly; iOS rejects a target that is not its current output instead of choosing a different destination.

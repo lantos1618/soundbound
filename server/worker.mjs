@@ -1,6 +1,6 @@
 // Single-owner development credential issuer. Device enrollment and per-route
 // grants belong in the control plane before any multi-user deployment.
-const TTL_SECONDS = 600;
+const TTL_SECONDS = 60;
 
 function reply(status, body) {
   return Response.json(body, {status, headers: {
@@ -22,14 +22,18 @@ async function equalSecrets(left, right) {
 export async function handleRequest(request, env, upstream = fetch) {
   const url = new URL(request.url);
   if (url.pathname === '/health' && request.method === 'GET') {
-    return reply(200, {service: 'soundbound-turn-issuer', status: 'ok'});
+    return reply(200, {service: 'soundbound-turn-issuer', status: 'ok', relayEnabled: env.TURN_ENABLED === 'true'});
   }
   if (url.pathname !== '/turn/credentials') return reply(404, {error: 'Not found'});
   if (request.method !== 'POST') return reply(405, {error: 'Use POST'});
+  // Fail closed. This switch is not itself a spending cap: keep it off until
+  // a provider-enforced budget or an independently bounded transport exists.
+  if (env.TURN_ENABLED !== 'true') return reply(503, {error: 'TURN is disabled until a spending limit is enforced'});
   if (!env.SOUNDBOUND_ACCESS_TOKEN || env.SOUNDBOUND_ACCESS_TOKEN.length < 32) {
     return reply(503, {error: 'Credential issuer is not configured'});
   }
   const bearer = request.headers.get('Authorization') ?? '';
+  if (bearer.length > 512) return reply(401, {error: 'Unauthorized'});
   if (!bearer.startsWith('Bearer ') || !await equalSecrets(bearer.slice(7), env.SOUNDBOUND_ACCESS_TOKEN)) {
     return reply(401, {error: 'Unauthorized'});
   }
@@ -39,7 +43,7 @@ export async function handleRequest(request, env, upstream = fetch) {
   try {
     const result = await upstream(
       `https://rtc.live.cloudflare.com/v1/turn/keys/${env.TURN_KEY_ID}/credentials/generate-ice-servers`,
-      {method: 'POST', headers: {
+      {method: 'POST', signal: AbortSignal.timeout(5000), headers: {
         'Authorization': `Bearer ${env.TURN_API_TOKEN}`,
         'Content-Type': 'application/json',
       }, body: JSON.stringify({ttl: TTL_SECONDS})});

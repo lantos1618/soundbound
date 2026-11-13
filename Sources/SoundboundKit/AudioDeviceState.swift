@@ -37,6 +37,24 @@ public struct AudioDeviceState: Equatable {
 }
 
 public enum AudioDeviceInventory {
+    public static let phoneSpeakerID = "builtin-speaker"
+    /// The physical speaker still exists while iOS routes audio to headphones.
+    /// Keep it visible without claiming that it is currently routable.
+    public static func phoneInventory(_ devices: [LocalAudioDevice], name: String) -> [LocalAudioDevice] {
+        var result = devices
+        if !result.contains(where: { $0.id == phoneSpeakerID }) {
+            var speaker = LocalAudioDevice(id: phoneSpeakerID, name: name + " Speaker", icon: "speaker.wave.2",
+                detail: "This iPhone · Audio output", status: "Choose in audio picker")
+            speaker.hasOutput = true; speaker.isAvailable = false; speaker.connection = .builtIn
+            result.append(speaker)
+        }
+        return reconcile(result)
+    }
+    /// Only hide our private routing machinery, not user-created virtual devices.
+    public static func isInternalDevice(id: String, name: String, processID: Int32) -> Bool {
+        id.hasPrefix("app.soundbound.internal.") ||
+            name.hasPrefix("CADefaultDeviceAggregate-\(processID)-")
+    }
     /// Paired/disconnected headphones still need destination controls. Their
     /// audio profiles often disappear while another host owns the connection.
     public static func headphones(in devices: [LocalAudioDevice]) -> [LocalAudioDevice] {
@@ -59,7 +77,7 @@ public enum AudioDeviceInventory {
     /// identity into one row. Distinct devices with equal names stay distinct.
     public static func reconcile(_ devices: [LocalAudioDevice]) -> [LocalAudioDevice] {
         var order: [String] = [], groups: [String: [LocalAudioDevice]] = [:], identitiesByID: [String: String] = [:]
-        for device in devices where !device.id.isEmpty {
+        for device in devices where !device.id.isEmpty && !device.id.hasPrefix("app.soundbound.internal.") {
             let key = identitiesByID[device.id] ?? identity(of: device)
             identitiesByID[device.id] = key
             if groups[key] == nil { order.append(key) }
@@ -78,6 +96,14 @@ public enum AudioDeviceInventory {
             result.canDisconnect = group.contains { $0.canDisconnect }
             result.systemInputID = group.first(where: { $0.systemInputID != nil })?.systemInputID
             result.systemOutputID = group.first(where: { $0.systemOutputID != nil })?.systemOutputID
+            let timing = AudioDeviceLatency(
+                inputMilliseconds: group.compactMap { $0.latency?.inputMilliseconds }.first,
+                outputMilliseconds: group.compactMap { $0.latency?.outputMilliseconds }.first,
+                ioBufferMilliseconds: group.compactMap { $0.latency?.ioBufferMilliseconds }.first,
+                playbackBufferMilliseconds: group.compactMap { $0.latency?.playbackBufferMilliseconds }.first,
+                playbackTargetMilliseconds: group.compactMap { $0.latency?.playbackTargetMilliseconds }.first,
+                playbackRecoveries: group.compactMap { $0.latency?.playbackRecoveries }.first)
+            if timing.inputMilliseconds != nil || timing.outputMilliseconds != nil || timing.ioBufferMilliseconds != nil || timing.playbackBufferMilliseconds != nil { result.latency = timing }
             return result
         }
     }

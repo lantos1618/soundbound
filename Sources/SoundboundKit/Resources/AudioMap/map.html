@@ -1,0 +1,97 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<link rel="stylesheet" href="reactflow.css">
+<style>
+  :root {
+    --canvas: #f2f2f7; --card: #ffffff; --ink: #1c1c1e; --muted: #6b6b70; --line: #c9c9d1; --hair: rgba(0,0,0,.08);
+    --live: #1a8c45; --live-soft: rgba(26,140,69,.12); --warn: #b26a00; --bad: #c0392b; --accent: #0a7aff;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --canvas: #121214; --card: #1c1c1e; --ink: #f2f2f7; --muted: #9a9aa2; --line: #4a4a52; --hair: rgba(255,255,255,.10);
+            --live: #4cc47a; --live-soft: rgba(76,196,122,.16); --warn: #f0a93b; --bad: #ff6b5e; --accent: #4da3ff; }
+  }
+  html, body, #root { height: 100%; margin: 0; background: var(--canvas); color: var(--ink);
+    font: 13px -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif; -webkit-user-select: none; user-select: none; }
+  #root { display: flex; flex-direction: column; }
+  .flow { flex: 1; min-height: 0; }
+  .node { box-sizing: border-box; width: 240px; background: var(--card); border: 1.5px solid var(--hair); border-radius: 14px; padding: 11px 12px 10px;
+    box-shadow: 0 2px 8px rgba(0,0,0,.05); }
+  .node.active { border-color: var(--live); }
+  .node.selected { box-shadow: 0 0 0 3px var(--accent); }
+  .head { display: flex; gap: 8px; align-items: flex-start; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--line); margin-top: 5px; flex: none; }
+  .active .dot { background: var(--live); }
+  .title { font-weight: 600; font-size: 14px; line-height: 1.25; }
+  .sub { color: var(--muted); font-size: 11.5px; line-height: 1.3; margin-top: 1px; }
+  .stage { font-size: 10px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); margin-bottom: 5px; }
+  .spark { display: flex; align-items: center; gap: 2px; height: 26px; margin: 8px 0 2px; }
+  .spark.freq { align-items: flex-end; }
+  .spark i { flex: 1; min-height: 2px; border-radius: 1px; background: var(--line); }
+  .active .spark i { background: var(--live); }
+  table.metrics { width: 100%; border-collapse: collapse; margin-top: 7px; font-variant-numeric: tabular-nums; }
+  table.metrics td { padding: 2px 0; font-size: 11.5px; color: var(--muted); border-top: 1px solid var(--hair); }
+  table.metrics td.v { text-align: right; color: var(--ink); font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 11px; }
+  table.metrics td.v.good { color: var(--live); } table.metrics td.v.warn { color: var(--warn); } table.metrics td.v.bad { color: var(--bad); } table.metrics td.v.none { color: var(--muted); }
+  .total { margin-top: 8px; padding: 6px 8px; border-radius: 8px; background: var(--live-soft); font-size: 11.5px; line-height: 1.3; }
+  .total b { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 13px; }
+  .total.idle { background: var(--hair); color: var(--muted); }
+  .node { cursor: grab; }
+  .controls { margin-top: 8px; padding-top: 6px; border-top: 1px solid var(--hair); display: grid; gap: 5px; }
+  .control { display: grid; grid-template-columns: 58px 1fr 44px; align-items: center; gap: 6px; font-size: 11.5px; color: var(--muted); cursor: default; }
+  .ticks { grid-column: 2; display: flex; justify-content: space-between; padding: 0 6px; margin-top: -3px; }
+  .ticks i { width: 2px; height: 4px; border-radius: 1px; background: var(--line); }
+  .ticks i.default { height: 7px; background: var(--accent); }
+  .control input { width: 100%; margin: 0; accent-color: var(--accent); }
+  .control b { text-align: right; color: var(--ink); font: 600 11px ui-monospace, "SF Mono", Menlo, monospace; }
+  .action, .tidy { border: 1px solid var(--hair); background: var(--canvas); color: var(--accent); font: 600 11.5px -apple-system, sans-serif;
+    border-radius: 8px; padding: 5px 8px; cursor: pointer; }
+  .action:disabled { color: var(--muted); cursor: default; }
+  .tidy { position: absolute; top: 12px; right: 12px; z-index: 5; background: var(--card); }
+  .region { width: 100%; height: 100%; box-sizing: border-box; border-radius: 22px; pointer-events: none; }
+  .region span { position: absolute; left: 16px; top: 9px; font-weight: 600; white-space: nowrap; }
+  /* The library hides a node until it has measured it; a boundary's size is already known, so never hide it. */
+  .react-flow__node-region { visibility: visible !important; }
+  .region.device { border: 2px solid var(--line); background: rgba(127,127,140,.06); }
+  .region.device span { font-size: 15px; }
+  .region.app { border: 1.5px solid var(--accent); background: rgba(10,122,255,.05); border-radius: 16px; }
+  .region.app span { font-size: 12px; color: var(--accent); top: 6px; left: 12px; }
+  .region.network { border: 2px dashed var(--warn); background: rgba(178,106,0,.05); border-radius: 16px; }
+  .region.network span { font-size: 12px; color: var(--warn); top: 6px; left: 12px; }
+  .react-flow__handle { width: 6px; height: 6px; background: var(--line); border: none; }
+  .react-flow__edge-path { stroke: var(--line); stroke-width: 2; }
+  .react-flow__edge.live .react-flow__edge-path { stroke: var(--live); stroke-width: 2.5; }
+  .react-flow__edge-text { fill: var(--ink); font: 600 11px ui-monospace, "SF Mono", Menlo, monospace; }
+  .react-flow__edge-textbg { fill: var(--card); stroke: var(--hair); }
+  .react-flow__controls { box-shadow: 0 1px 4px rgba(0,0,0,.12); border-radius: 8px; overflow: hidden; }
+  .react-flow__controls-button { background: var(--card); border-bottom: 1px solid var(--hair); fill: var(--ink); }
+  .react-flow__minimap { background: var(--card); border-radius: 8px; }
+  .react-flow__attribution { display: none; }
+  .detail { flex: none; max-height: 34%; overflow: auto; background: var(--card); border-top: 1px solid var(--hair); padding: 12px 16px;
+    -webkit-user-select: text; user-select: text; }
+  .detail h4 { margin: 0 0 6px; font-size: 13px; display: flex; justify-content: space-between; }
+  .detail h4 button { border: 0; background: none; color: var(--accent); font: inherit; cursor: pointer; padding: 0; }
+  .detail pre { margin: 0; white-space: pre-wrap; font: 11.5px/1.45 ui-monospace, "SF Mono", Menlo, monospace; color: var(--muted); }
+  .empty { position: absolute; inset: 0; display: grid; place-items: center; color: var(--muted); font-size: 14px; text-align: center; padding: 24px; pointer-events: none; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script>
+  // Show a load or script failure on the page itself instead of leaving it blank.
+  window.addEventListener('error', function (event) {
+    var box = document.createElement('pre');
+    box.style.cssText = 'position:fixed;left:12px;right:12px;bottom:12px;margin:0;padding:10px;border-radius:8px;background:#fde8e6;color:#8a1c12;font:11px ui-monospace,Menlo,monospace;white-space:pre-wrap;z-index:99';
+    box.textContent = 'Audio map failed to load: ' + (event.message || (event.target && (event.target.src || event.target.href)) || 'unknown error') +
+      (event.filename ? '\n' + event.filename.split('/').pop() + ':' + event.lineno : '');
+    document.body.appendChild(box);
+  }, true);
+</script>
+<script src="react.js"></script>
+<script src="react-dom.js"></script>
+<script src="reactflow.js"></script>
+<script src="map.js"></script>
+</body>
+</html>

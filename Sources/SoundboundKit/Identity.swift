@@ -29,6 +29,9 @@ public struct PeerCard: Codable, Equatable, Identifiable {
     public var publicKey: String
     public var name: String
     public var kind: String
+    /// The name of the person signed in on the device, so people can be listed by name. Absent when signed out
+    /// and from older builds.
+    public var owner: String? = nil
     public var id: String { Identity.fingerprint(publicKey) }
 }
 

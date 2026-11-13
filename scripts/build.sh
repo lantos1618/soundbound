@@ -46,6 +46,7 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 <key>NSLocalNetworkUsageDescription</key><string>Find nearby Soundbound devices and send pairing requests when you turn on Discover.</string>
 <key>NSBonjourServices</key><array><string>_soundbound._tcp</string></array>
 <key>NSMicrophoneUsageDescription</key><string>Share your microphone with a paired device only after you choose Share microphone and it approves playback.</string>
+<key>NSAudioCaptureUsageDescription</key><string>Adjust application volume locally, or share Mac application audio with paired devices in your active room when you choose Share Mac audio.</string>
 <key>NSBluetoothAlwaysUsageDescription</key><string>Soundbound connects to the headphones you choose.</string>
 <key>NSBluetoothPeripheralUsageDescription</key><string>Soundbound connects to the headphones you choose.</string>
 <key>NSHighResolutionCapable</key><true/>

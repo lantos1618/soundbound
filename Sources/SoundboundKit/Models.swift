@@ -3,6 +3,17 @@ import Foundation
 public enum JoinPolicy: String, Codable, CaseIterable {
     case request = "Ask to join", friends = "Friends can join", invite = "Invite only"
 }
+/// What a guest may do in a room. The owner always has full control.
+public enum GuestRole: String, Codable, CaseIterable {
+    case control = "Can control", listen = "Can listen"
+}
+/// A paired device the owner has invited to a room.
+public struct RoomGuest: Codable, Identifiable, Equatable {
+    public var id: String
+    public var name: String
+    public var role: GuestRole
+    public init(id: String, name: String, role: GuestRole) { self.id = id; self.name = name; self.role = role }
+}
 public struct AudioRoom: Codable, Identifiable, Equatable {
     public var id = UUID().uuidString
     public var name: String
@@ -12,6 +23,9 @@ public struct AudioRoom: Codable, Identifiable, Equatable {
     public var level: Double = 0.5
     public var omni = false
     public var members: Set<String> = []
+    /// Optional so rooms saved or mirrored by earlier builds still decode.
+    public var guests: [RoomGuest]?
+    public func role(of deviceID: String) -> GuestRole? { guests?.first { $0.id == deviceID }?.role }
 }
 public struct KnownPeer: Codable, Identifiable {
     public var card: PeerCard
@@ -88,10 +102,64 @@ public struct LocalAudioDevice: Identifiable, Equatable, Codable {
     public var busy = false
     public var connection: AudioConnection?
     public var physicalID: String?
+    public var legacyID: String?
+    public var latency: AudioDeviceLatency?
     public var canMoveBetweenHosts: Bool { connection == .bluetooth }
     public var connectionLabel: String { connection?.rawValue ?? "Audio device" }
     public init(id: String, name: String, icon: String, detail: String, status: String) {
         self.id = id; self.name = name; self.icon = icon; self.detail = detail; self.status = status
+    }
+    /// The delay this device reports for its own side of the path: OS latency, hardware buffer and queued audio.
+    /// Nil when the OS reports none of them. A lower bound, not an acoustic measurement.
+    public var reportedDelayMilliseconds: Double? {
+        guard let latency else { return nil }
+        let parts = hasOutput
+            ? [latency.outputMilliseconds, latency.ioBufferMilliseconds, latency.playbackBufferMilliseconds]
+            : [latency.inputMilliseconds, latency.ioBufferMilliseconds]
+        let reported = parts.compactMap { $0 }
+        return reported.isEmpty ? nil : reported.reduce(0, +)
+    }
+    /// The row's one-line summary: how the device is connected, then the delay along that path.
+    /// `network` and `roundTrip` describe the link to the host that owns a remote device; a remote
+    /// device shows no figure until that link has been measured.
+    public func connectionSummary(connected: Bool = true, remote: Bool = false,
+                                  network: String? = nil, roundTrip: Double? = nil) -> String {
+        guard connected else { return connectionLabel + " · Not connected" }
+        var type = connectionLabel
+        if let network { type = connection == nil || connection == .builtIn ? network : network + " + " + type }
+        let delay: Double?
+        if remote { delay = AudioDeviceLatency.valid(roundTrip).map { $0 / 2 + (reportedDelayMilliseconds ?? 0) } }
+        else { delay = reportedDelayMilliseconds }
+        guard let delay else { return type }
+        return type + " · " + String(format: "%.0f ms", delay)
+    }
+}
+
+/// OS-reported components, never a sum or a capture-to-speaker measurement.
+public struct AudioDeviceLatency: Codable, Equatable {
+    public var inputMilliseconds: Double?
+    public var outputMilliseconds: Double?
+    public var ioBufferMilliseconds: Double?
+    public var playbackBufferMilliseconds: Double?
+    public var playbackTargetMilliseconds: Double?
+    public var playbackRecoveries: Int?
+    public init(inputMilliseconds: Double? = nil, outputMilliseconds: Double? = nil,
+                ioBufferMilliseconds: Double? = nil, playbackBufferMilliseconds: Double? = nil,
+                playbackTargetMilliseconds: Double? = nil, playbackRecoveries: Int? = nil) {
+        self.inputMilliseconds = Self.valid(inputMilliseconds)
+        self.outputMilliseconds = Self.valid(outputMilliseconds)
+        self.ioBufferMilliseconds = Self.valid(ioBufferMilliseconds)
+        self.playbackBufferMilliseconds = Self.valid(playbackBufferMilliseconds)
+        self.playbackTargetMilliseconds = Self.valid(playbackTargetMilliseconds)
+        self.playbackRecoveries = playbackRecoveries
+    }
+    public static func valid(_ milliseconds: Double?) -> Double? {
+        guard let milliseconds, milliseconds.isFinite, milliseconds >= 0, milliseconds <= 10_000 else { return nil }
+        return milliseconds
+    }
+    public static func milliseconds(frames: UInt32?, sampleRate: Double) -> Double? {
+        guard let frames, sampleRate.isFinite, sampleRate > 0 else { return nil }
+        return valid(Double(frames) * 1_000 / sampleRate)
     }
 }
 

@@ -76,7 +76,7 @@ final class AppMixer: ObservableObject {
     }
 }
 
-private enum MixerHAL {
+enum MixerHAL {
     static func address(_ selector: AudioObjectPropertySelector, scope: AudioObjectPropertyScope = kAudioObjectPropertyScopeGlobal) -> AudioObjectPropertyAddress {
         AudioObjectPropertyAddress(mSelector: selector, mScope: scope, mElement: kAudioObjectPropertyElementMain)
     }
@@ -97,27 +97,40 @@ private enum MixerHAL {
         guard !values.isEmpty, AudioObjectGetPropertyData(id, &address, 0, nil, &size, &values) == noErr else { return [] }
         return values
     }
+    static func processObject(_ pid: pid_t) -> AudioObjectID? {
+        var address = address(kAudioHardwarePropertyTranslatePIDToProcessObject)
+        var pid = pid, object = AudioObjectID(0), size = UInt32(MemoryLayout<AudioObjectID>.size)
+        guard AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &address,
+            UInt32(MemoryLayout<pid_t>.size), &pid, &size, &object) == noErr, object != 0 else { return nil }
+        return object
+    }
 }
 
 @available(macOS 14.2, *)
-private final class AppTapSession {
+final class AppTapSession {
     let processes: [AudioObjectID]
     let outputID: AudioObjectID
+    let excludedProcesses: [AudioObjectID]?
     private let gainState: OSAllocatedUnfairLock<Float>
     func setGain(_ gain: Float) { gainState.withLock { $0 = gain } }
     private var tap: AudioObjectID = 0
     private var aggregate: AudioObjectID = 0
     private var io: AudioDeviceIOProcID?
-    init(processes: [AudioObjectID], gain: Float) throws {
+    private let captureBridge: ApplicationAudioBridge?
+    init(processes: [AudioObjectID], gain: Float, capture: ApplicationAudioBridge? = nil,
+         excluding excludedProcesses: [AudioObjectID]? = nil) throws {
         self.processes = processes
+        self.captureBridge = capture
+        self.excludedProcesses = excludedProcesses
         gainState = OSAllocatedUnfairLock(initialState: gain)
         outputID = MixerHAL.number(AudioObjectID(kAudioObjectSystemObject), kAudioHardwarePropertyDefaultOutputDevice)
         do {
             guard let outputUID = MixerHAL.string(outputID, kAudioDevicePropertyDeviceUID) else { throw MixerError.output }
-            let description = CATapDescription(stereoMixdownOfProcesses: processes)
+            let description = excludedProcesses.map { CATapDescription(stereoGlobalTapButExcludeProcesses: $0) }
+                ?? CATapDescription(stereoMixdownOfProcesses: processes)
             description.name = "Soundbound app mixer"
             description.isPrivate = true
-            description.muteBehavior = .mutedWhenTapped
+            description.muteBehavior = capture == nil ? .mutedWhenTapped : .unmuted
             try check(AudioHardwareCreateProcessTap(description, &tap))
             var format = AudioStreamBasicDescription(), address = MixerHAL.address(kAudioTapPropertyFormat)
             var size = UInt32(MemoryLayout.size(ofValue: format))
@@ -126,7 +139,7 @@ private final class AppTapSession {
                   format.mFormatFlags & kAudioFormatFlagIsFloat != 0 else { throw MixerError.format }
             let config: [String: Any] = [
                 kAudioAggregateDeviceNameKey: "Soundbound app mixer",
-                kAudioAggregateDeviceUIDKey: UUID().uuidString,
+                kAudioAggregateDeviceUIDKey: "app.soundbound.internal.mixer." + UUID().uuidString,
                 kAudioAggregateDeviceIsPrivateKey: true,
                 kAudioAggregateDeviceMainSubDeviceKey: outputUID,
                 kAudioAggregateDeviceSubDeviceListKey: [[kAudioSubDeviceUIDKey: outputUID]],
@@ -134,6 +147,7 @@ private final class AppTapSession {
                 kAudioAggregateDeviceTapAutoStartKey: true
             ]
             try check(AudioHardwareCreateAggregateDevice(config as CFDictionary, &aggregate))
+            if capture != nil { requestSmallerCaptureBuffer() }
             var outputFormat = AudioStreamBasicDescription()
             var outputAddress = MixerHAL.address(kAudioDevicePropertyStreamFormat, scope: kAudioDevicePropertyScopeOutput)
             var outputSize = UInt32(MemoryLayout.size(ofValue: outputFormat))
@@ -141,6 +155,7 @@ private final class AppTapSession {
             guard outputFormat.mFormatID == kAudioFormatLinearPCM, outputFormat.mBitsPerChannel == 32,
                   outputFormat.mFormatFlags & kAudioFormatFlagIsFloat != 0,
                   abs(outputFormat.mSampleRate - format.mSampleRate) < 1 else { throw MixerError.format }
+            try capture?.configure(sampleRate: format.mSampleRate)
             let gainState = self.gainState
             var previousGain = gain
             try check(AudioDeviceCreateIOProcIDWithBlock(&io, aggregate, nil) { _, input, _, output, _ in
@@ -148,6 +163,11 @@ private final class AppTapSession {
                 previousGain = currentGain
                 let inputs = UnsafeMutableAudioBufferListPointer(UnsafeMutablePointer(mutating: input))
                 let outputs = UnsafeMutableAudioBufferListPointer(output)
+                if let capture {
+                    capture.submit(inputs)
+                    for out in outputs { if let data = out.mData { memset(data, 0, Int(out.mDataByteSize)) } }
+                    return
+                }
                 var channelOffset = 0
                 for out in outputs {
                     guard let raw = out.mData, out.mNumberChannels > 0 else { continue }
@@ -173,10 +193,29 @@ private final class AppTapSession {
                 }
             })
             try check(AudioDeviceStart(aggregate, io))
+            if capture != nil { Logger(subsystem: "app.soundbound", category: "capture").notice("Application capture started") }
         } catch { stop(); throw error }
     }
     deinit { stop() }
+    private func requestSmallerCaptureBuffer() {
+        var address = MixerHAL.address(kAudioDevicePropertyBufferFrameSize)
+        var settable: DarwinBoolean = false
+        var range = AudioValueRange(), rangeAddress = MixerHAL.address(kAudioDevicePropertyBufferFrameSizeRange)
+        var size = UInt32(MemoryLayout<AudioValueRange>.size)
+        guard AudioObjectIsPropertySettable(aggregate, &address, &settable) == noErr, settable.boolValue,
+              AudioObjectGetPropertyData(aggregate, &rangeAddress, 0, nil, &size, &range) == noErr,
+              range.mMinimum.isFinite, range.mMaximum.isFinite,
+              range.mMinimum > 0, range.mMinimum <= range.mMaximum, range.mMaximum <= Double(UInt32.max) else { return }
+        var frames = UInt32(min(range.mMaximum, max(range.mMinimum, 128)))
+        let result = AudioObjectSetPropertyData(aggregate, &address, 0, nil, UInt32(MemoryLayout<UInt32>.size), &frames)
+        var actual: UInt32 = 0
+        size = UInt32(MemoryLayout<UInt32>.size)
+        guard AudioObjectGetPropertyData(aggregate, &address, 0, nil, &size, &actual) == noErr else { return }
+        Logger(subsystem: "app.soundbound", category: "capture").notice("Capture buffer request result \(result, privacy: .public); actual frames \(actual, privacy: .public)")
+    }
     func stop() {
+        captureBridge?.stop()
+        if aggregate != 0, captureBridge != nil { Logger(subsystem: "app.soundbound", category: "capture").notice("Application capture stopped") }
         if aggregate != 0, let io { AudioDeviceStop(aggregate, io); AudioDeviceDestroyIOProcID(aggregate, io) }
         io = nil
         if aggregate != 0 { AudioHardwareDestroyAggregateDevice(aggregate); aggregate = 0 }

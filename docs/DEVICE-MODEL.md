@@ -19,6 +19,8 @@ Room membership is organization, not proof of physical location. Local audio enu
 
 Inputs and outputs are nested under the host that reports them. Nearby paired hosts exchange signed inventory snapshots every five seconds; this metadata is visible on the local network. A remote row reports the other host’s state and does not grant remote control of that output.
 
+After automatic account linking, the initiator requests inventory only after verifying the final account reply. The responder requests the initiator's inventory when that first trusted request arrives. Inventory requests time out after five seconds; missed replies, disconnects and stale callbacks cannot block a later refresh for the generic network timeout. An empty inventory is still a successful reply and does not trigger a reciprocal polling loop.
+
 Dragging a host into a room includes its attached components. Components can also have independent room memberships. Removing the parent from one room does not erase those independent assignments. Room definitions and layout assignments are mirrored from their creating device to nearby paired devices. The creator remains the editor; this does not grant remote audio access.
 
 Local route changes can request confirmation before Soundbound performs them. Changes initiated by Apple are observed afterward. A disconnect alone cannot prove which other host took ownership, so Soundbound must not describe it as an intercepted transfer request.

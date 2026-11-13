@@ -50,12 +50,16 @@ enum Audio {
         var devices = [AudioDeviceID](repeating: 0, count: Int(size) / MemoryLayout<AudioDeviceID>.size)
         guard AudioObjectGetPropertyData(system, &address, 0, nil, &size, &devices) == noErr else { return [] }
         return devices.compactMap { id in
+            let uid = string(id, kAudioDevicePropertyDeviceUID)
+            let name = string(id, kAudioObjectPropertyName)
+            guard !AudioDeviceInventory.isInternalDevice(id: uid, name: name,
+                processID: ProcessInfo.processInfo.processIdentifier) else { return nil }
             var streams = AudioObjectPropertyAddress(mSelector: kAudioDevicePropertyStreams, mScope: scope, mElement: kAudioObjectPropertyElementMain)
             var bytes: UInt32 = 0
             guard AudioObjectGetPropertyDataSize(id, &streams, 0, nil, &bytes) == noErr, bytes > 0 else { return nil }
             var transport: UInt32 = 0
             _ = read(id, kAudioDevicePropertyTransportType, into: &transport)
-            return Output(id: id, uid: string(id, kAudioDevicePropertyDeviceUID), name: string(id, kAudioObjectPropertyName), bluetooth: transport == kAudioDeviceTransportTypeBluetooth || transport == kAudioDeviceTransportTypeBluetoothLE, transport: transport)
+            return Output(id: id, uid: uid, name: name, bluetooth: transport == kAudioDeviceTransportTypeBluetooth || transport == kAudioDeviceTransportTypeBluetoothLE, transport: transport)
         }.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
     }
 
@@ -63,6 +67,21 @@ enum Audio {
         var address = AudioObjectPropertyAddress(mSelector: kAudioHardwarePropertyDefaultOutputDevice, mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain)
         var id = output.id
         return AudioObjectSetPropertyData(AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, UInt32(MemoryLayout.size(ofValue: id)), &id)
+    }
+
+    static func latency(_ device: AudioDeviceID, scope: AudioObjectPropertyScope) -> Double? {
+        var sampleRate: Float64 = 0, frames: UInt32 = 0
+        guard read(device, kAudioDevicePropertyNominalSampleRate, into: &sampleRate) else { return nil }
+        var address = AudioObjectPropertyAddress(mSelector: kAudioDevicePropertyLatency, mScope: scope, mElement: kAudioObjectPropertyElementMain)
+        var size = UInt32(MemoryLayout<UInt32>.size)
+        guard AudioObjectGetPropertyData(device, &address, 0, nil, &size, &frames) == noErr else { return nil }
+        return AudioDeviceLatency.milliseconds(frames: frames, sampleRate: sampleRate)
+    }
+    static func bufferDuration(_ device: AudioDeviceID) -> Double? {
+        var sampleRate: Float64 = 0, frames: UInt32 = 0
+        guard read(device, kAudioDevicePropertyNominalSampleRate, into: &sampleRate),
+              read(device, kAudioDevicePropertyBufferFrameSize, into: &frames) else { return nil }
+        return AudioDeviceLatency.milliseconds(frames: frames, sampleRate: sampleRate)
     }
 }
 
@@ -86,6 +105,10 @@ final class SoundModel: NSObject, ObservableObject {
     var onTestStopped: ((String) -> Void)?
     private var outputTestID: String?
     var onTestFrame: ((String, Data) -> Void)?
+    var playbackGain: ((String) -> Double)?
+    func setPlaybackGain(_ id: String, level: Double) {
+        if outputTestID == id { verificationPlayer?.volume = Float(AudioGain.clamped(level)) }
+    }
     var onDeparture: ((String) -> Void)?
     private var listeners: [(AudioObjectPropertyAddress, AudioObjectPropertyListenerBlock)] = []
     private var previouslyOnMac: Bool?
@@ -143,6 +166,13 @@ final class SoundModel: NSObject, ObservableObject {
             row.systemOutputID = output?.id
             row.systemInputID = input?.id
             row.hasInput = input != nil; row.hasOutput = output != nil
+            let playback = AudioPlaybackMetrics.snapshot(id: id, systemID: output?.id)
+            row.latency = AudioDeviceLatency(
+                inputMilliseconds: input.flatMap { Audio.latency($0.id, scope: kAudioDevicePropertyScopeInput) },
+                outputMilliseconds: output.flatMap { Audio.latency($0.id, scope: kAudioDevicePropertyScopeOutput) },
+                ioBufferMilliseconds: Audio.bufferDuration(device.id),
+                playbackBufferMilliseconds: playback?.queuedMilliseconds,
+                playbackTargetMilliseconds: playback?.targetMilliseconds, playbackRecoveries: playback?.recoveries)
             row.selectedInput = selectedInput; row.selectedOutput = selectedOutput
             row.canDisconnect = device.bluetooth && paired.contains { matches(device, $0) }
             row.canTest = device.bluetooth && selectedOutput
@@ -429,6 +459,7 @@ final class SoundModel: NSObject, ObservableObject {
             }
             engine.attach(player); engine.connect(player, to: engine.mainMixerNode, format: format)
             let targetID = rowID(for: output)
+            player.volume = Float(AudioGain.clamped(playbackGain?(targetID) ?? 1))
             engine.mainMixerNode.installTap(onBus: 0, bufferSize: 960, format: format) { [weak self] buffer, _ in
                 guard let samples = buffer.floatChannelData?[0] else { return }
                 var bytes = Data(capacity: Int(buffer.frameLength) * 2)

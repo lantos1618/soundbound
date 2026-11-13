@@ -4,6 +4,34 @@ import Network
 @testable import SoundboundKit
 
 final class AudioMeshTests: XCTestCase {
+    func testSilentPeerTimesOutWithoutAuthenticatingOrSendingAudio() throws {
+        let ended = expectation(description: "Silent handshake is bounded")
+        let listener = try NWListener(using: .tcp, on: .any)
+        var accepted: NWConnection?
+        var channel: AudioMeshChannel?
+        listener.newConnectionHandler = { connection in
+            accepted = connection
+            connection.start(queue: .main)
+            // Deliberately never send an encrypted hello.
+        }
+        listener.stateUpdateHandler = { state in
+            guard case .ready = state, let port = listener.port else { return }
+            let connection = NWConnection(host: "127.0.0.1", port: port, using: .tcp)
+            let candidate = AudioMeshChannel(connection: connection,
+                sendKey: SymmetricKey(size: .bits256), receiveKey: SymmetricKey(size: .bits256),
+                session: "timeout", source: true, handshakeTimeout: 0.2)
+            channel = candidate
+            candidate.ready = { XCTFail("TCP ready must not count as authenticated") }
+            candidate.sentAudio = { XCTFail("Audio must wait for authentication") }
+            candidate.ended = { error in XCTAssertNotNil(error); ended.fulfill() }
+            candidate.start()
+            candidate.sendAudio(Data([1, 0]))
+        }
+        listener.start(queue: .main)
+        wait(for: [ended], timeout: 3)
+        channel?.stop(); accepted?.cancel(); listener.cancel()
+    }
+
     func testDirectionalKeyAgreementAndEncryptedAudio() throws {
         let source = Curve25519.KeyAgreement.PrivateKey(), sink = Curve25519.KeyAgreement.PrivateKey()
         let a = try AudioSessionCipher.keys(privateKey: source, remote: sink.publicKey.rawRepresentation.url64,

@@ -1,6 +1,8 @@
-#if os(iOS)
 import SwiftUI
 import AVFoundation
+import Vision
+
+#if os(iOS)
 import UIKit
 
 struct ScannerScreen: View {
@@ -44,8 +46,31 @@ struct CameraScanner: UIViewRepresentable {
     }
     func updateUIView(_ uiView: PreviewView, context: Context) {}
     static func dismantleUIView(_ uiView: PreviewView, coordinator: Coordinator) { coordinator.stop() }
+}
+#else
+import AppKit
 
-    final class Coordinator: NSObject, AVCaptureMetadataOutputObjectsDelegate {
+/// The Mac's camera, shown the same way as on iPhone: as the background of the pairing sheet.
+struct CameraScanner: NSViewRepresentable {
+    let completion: (String?) -> Void
+    let error: (String) -> Void
+    func makeCoordinator() -> Coordinator { Coordinator(completion: completion, error: error) }
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView()
+        let preview = AVCaptureVideoPreviewLayer(session: context.coordinator.session)
+        preview.videoGravity = .resizeAspectFill
+        view.wantsLayer = true
+        view.layer = preview
+        context.coordinator.start()
+        return view
+    }
+    func updateNSView(_ view: NSView, context: Context) {}
+    static func dismantleNSView(_ view: NSView, coordinator: Coordinator) { coordinator.stop() }
+}
+#endif
+
+extension CameraScanner {
+    final class Coordinator: NSObject, AVCaptureMetadataOutputObjectsDelegate, AVCaptureVideoDataOutputSampleBufferDelegate {
         let session = AVCaptureSession()
         private let queue = DispatchQueue(label: "app.soundbound.camera")
         private let completion: (String?) -> Void
@@ -72,19 +97,46 @@ struct CameraScanner: UIViewRepresentable {
                     let output = AVCaptureMetadataOutput()
                     guard self.session.canAddOutput(output) else { self.session.commitConfiguration(); return }
                     self.session.addOutput(output)
-                    output.setMetadataObjectsDelegate(self, queue: .main)
-                    output.metadataObjectTypes = [.qr]
+                    if output.availableMetadataObjectTypes.contains(.qr) {
+                        output.setMetadataObjectsDelegate(self, queue: .main)
+                        output.metadataObjectTypes = [.qr]
+                    } else {
+                        // This camera has no built-in code reader (true of Mac cameras), and asking for one throws.
+                        // Read codes from the video frames instead.
+                        self.session.removeOutput(output)
+                        let frames = AVCaptureVideoDataOutput()
+                        frames.alwaysDiscardsLateVideoFrames = true
+                        if self.session.canAddOutput(frames) {
+                            self.session.addOutput(frames)
+                            frames.setSampleBufferDelegate(self, queue: self.frameQueue)
+                        }
+                    }
                     self.session.commitConfiguration()
                     if !self.stopped { self.session.startRunning() }
                 }
             }
         }
+        private let frameQueue = DispatchQueue(label: "app.soundbound.camera.frames")
+        private var lastFrame = Date.distantPast
+        func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
+            // A few looks a second is plenty for a code held up to the camera.
+            guard Date().timeIntervalSince(lastFrame) > 0.25, let image = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
+            lastFrame = Date()
+            let request = VNDetectBarcodesRequest()
+            request.symbologies = [.qr]
+            try? VNImageRequestHandler(cvPixelBuffer: image).perform([request])
+            guard let value = request.results?.compactMap(\.payloadStringValue).first else { return }
+            DispatchQueue.main.async { self.deliver(value) }
+        }
         func stop() { queue.async { self.stopped = true; self.session.stopRunning() } }
         func metadataOutput(_ output: AVCaptureMetadataOutput, didOutput metadataObjects: [AVMetadataObject], from connection: AVCaptureConnection) {
-            guard !delivered, let value = (metadataObjects.first as? AVMetadataMachineReadableCodeObject)?.stringValue else { return }
+            guard let value = (metadataObjects.first as? AVMetadataMachineReadableCodeObject)?.stringValue else { return }
+            deliver(value)
+        }
+        private func deliver(_ value: String) {
+            guard !delivered else { return }
             guard value.hasPrefix("soundbound://invite?") || value.hasPrefix("soundbound://pair?") else { error("That isn’t a Soundbound code."); return }
             delivered = true; stop(); completion(value)
         }
     }
 }
-#endif

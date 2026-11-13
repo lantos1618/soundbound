@@ -24,7 +24,7 @@
 	<array>
 		<string>_soundbound._tcp</string>
 	</array>
-	<key>NSAudioCaptureUsageDescription</key><string>Adjust the volume of individual apps using the local application mixer. Audio is not saved or shared.</string>
+	<key>NSAudioCaptureUsageDescription</key><string>Adjust application volume locally, or share Mac application audio with paired devices in your active room when you choose Share Mac audio.</string>
 <key>NSMicrophoneUsageDescription</key>
 	<string>Share your microphone with a paired device only after you tap Share microphone and it approves playback.</string>
 	<key>NSCameraUsageDescription</key>

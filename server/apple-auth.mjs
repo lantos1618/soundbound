@@ -51,7 +51,9 @@ export async function verifyAppleIdentityToken(token, {audience, nonce, now = Da
   if (parts.length !== 3) throw new Error('token');
   const header = JSON.parse(new TextDecoder().decode(decode(parts[0])));
   if (header.alg !== 'RS256' || !safeToken(header.kid, 1, 128)) throw new Error('algorithm');
-  const keysResponse = await upstream(`${APPLE_ISSUER}/auth/keys`, {redirect: 'error'});
+  // Cloudflare Workers reject redirect: 'error' with a TypeError. 'manual' hands back any 3xx,
+  // which fails the ok check below, so a redirect is still never followed.
+  const keysResponse = await upstream(`${APPLE_ISSUER}/auth/keys`, {redirect: 'manual'});
   if (!keysResponse.ok) throw new Error('keys');
   const {keys} = await keysResponse.json();
   const jwk = keys?.find(key => key.kid === header.kid && key.kty === 'RSA' && (!key.alg || key.alg === 'RS256'));
@@ -126,7 +128,7 @@ export async function handleAppleAuth(request, env, storage, dependencies = {}) 
       try {
         const secret = await createAppleClientSecret(env, now);
         failureStage = 'exchange_failed';
-        const tokenResponse = await upstream(`${APPLE_ISSUER}/auth/token`, {method: 'POST', redirect: 'error',
+        const tokenResponse = await upstream(`${APPLE_ISSUER}/auth/token`, {method: 'POST', redirect: 'manual',
           headers: {'Content-Type': 'application/x-www-form-urlencoded'},
           body: new URLSearchParams({grant_type: 'authorization_code', code, client_id: env.APPLE_SERVICE_ID,
             client_secret: secret, redirect_uri: env.APPLE_AUTH_CALLBACK_URL}).toString()});
@@ -149,8 +151,10 @@ export async function handleAppleAuth(request, env, storage, dependencies = {}) 
         const verifiedEmail = claims.email_verified === true || claims.email_verified === 'true';
         await storage.put(`redeem:${redemption}`, {challenge: flow.challenge, expires: now + 60_000,
           profile: {provider: 'apple', subject: claims.sub, name, email: verifiedEmail ? claims.email : undefined,
+            deviceProof: /^[a-f0-9]{64}$/.test(flow.nonce) && tokens.id_token.length <= 4096 ? tokens.id_token : undefined,
             expiresAt: Math.min(claims.exp, Math.floor(now / 1000) + 3600)}});
-        // Apple's ID/access/refresh tokens are deliberately not stored or returned.
+        // Only the device-bound ID assertion travels through one-use PKCE redemption.
+        // Access and refresh tokens are never stored or returned.
         diagnostic('redemption_issued');
         return redirect(appCallback(flow.clientState, {code: redemption}));
       } catch (error) {

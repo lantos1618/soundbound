@@ -20,6 +20,10 @@ def generate(platform):
     if mobile:
         files += [(p.name, '../../' + str(p.relative_to(root))) for p in sorted((root/'Sources/SoundboundKit').glob('*.swift'))]
     resources = [('SoundboundMark.png', '../../Sources/SoundboundKit/Resources/SoundboundMark.png'), ('Assets.xcassets', 'Assets.xcassets')]
+    if mobile:
+        resources.append(("yolo26n.mlmodelc", "../../Sources/SoundboundKit/Resources/yolo26n.mlmodelc"))
+        resources.append(("YOLO-LICENSE.txt", "../../Sources/SoundboundKit/Resources/YOLO-LICENSE.txt"))
+        resources.append(("AudioMap", "../../Sources/SoundboundKit/Resources/AudioMap"))
     objects=[]
     package_ref = ''
     package_products = ''
@@ -35,7 +39,7 @@ def generate(platform):
         objects += [f'{ident("file"+name)} = {{isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "{path}"; sourceTree = SOURCE_ROOT; }};',
                     f'{ident("build"+name)} = {{isa = PBXBuildFile; fileRef = {ident("file"+name)}; }};']
     for name,path in resources:
-        resource_type = 'folder.assetcatalog' if name.endswith('.xcassets') else 'image.png'
+        resource_type = 'folder.assetcatalog' if name.endswith('.xcassets') else ('folder' if name.endswith('.mlmodelc') or name == 'AudioMap' else ('text' if name.endswith('.txt') else 'image.png'))
         objects += [f'{ident("file"+name)} = {{isa = PBXFileReference; lastKnownFileType = {resource_type}; path = "{path}"; sourceTree = SOURCE_ROOT; }};',
                     f'{ident("build"+name)} = {{isa = PBXBuildFile; fileRef = {ident("file"+name)}; }};']
     objects += [f'{ident("product")} = {{isa = PBXFileReference; explicitFileType = wrapper.application; path = Soundbound.app; sourceTree = BUILT_PRODUCTS_DIR; }};',

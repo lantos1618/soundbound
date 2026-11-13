@@ -8,18 +8,22 @@ import UIKit
 import AppKit
 #endif
 
-/// Apple authorization for this installation. Cached profile data never grants
-/// room permissions, and identity/access tokens are not persisted by the app.
+/// Apple authorization for this installation. Display metadata alone grants no
+/// permissions. Device-bound identity assertions are stored; access/refresh tokens are not.
 public final class AppleAccount: NSObject, ObservableObject, ASAuthorizationControllerDelegate, ASAuthorizationControllerPresentationContextProviding, ASWebAuthenticationPresentationContextProviding {
     public static let shared = AppleAccount()
     @Published public private(set) var displayName: String?
     @Published public private(set) var email: String?
     @Published public private(set) var isSignedIn = false
     @Published public private(set) var isBusy = false
+    @Published public private(set) var isCheckingCredential = false
     @Published public private(set) var message: String?
     private var generation = UUID()
     private var webSession: ASWebAuthenticationSession?
     private var webExchange: URLSessionDataTask?
+    // End locally before the broker's ten-minute flow expires, including
+    // when the Mac sleeps while Apple's page is open.
+    private var webSignInDeadline: Date?
     private var verifiedWebUser: String?
     private var webVerifiedUntil: Date?
     private var expectedState: String?
@@ -35,7 +39,43 @@ public final class AppleAccount: NSObject, ObservableObject, ASAuthorizationCont
         var name: String?
         var email: String?
         var method: String?
+        /// Apple's signed identity token from a sign-in whose nonce was bound to this device's key.
+        var proof: String?
     }
+    /// The person's name as this computer knows it. iPhone offers no equivalent.
+    static var deviceOwnerName: String? {
+        #if os(macOS)
+        let name = NSFullUserName().trimmingCharacters(in: .whitespacesAndNewlines)
+        return name.isEmpty ? nil : String(name.prefix(60))
+        #else
+        return nil
+        #endif
+    }
+    /// Reads the email from our own freshly issued identity token, for display only.
+    static func emailClaim(_ token: String) -> String? {
+        let parts = token.split(separator: ".").map(String.init)
+        guard parts.count == 3, let data = Data(url64: parts[1]),
+              let claims = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let email = claims["email"] as? String, !email.isEmpty, email.count <= 254 else { return nil }
+        return email
+    }
+    /// This device's public key. Set once the device identity is loaded; sign-in binds to it.
+    public var deviceBinding: String?
+    private var signInBoundTo: String?
+    /// The Apple account subject from the currently verified sign-in.
+    public var accountID: String? {
+        guard isSignedIn, let profile else { return nil }
+        if profile.method == "web", (webVerifiedUntil ?? .distantPast) <= Date() { return nil }
+        return profile.user
+    }
+    /// Proof other paired devices can check to see that this device belongs to `accountID`.
+    public var accountProof: String? {
+        guard accountID != nil, let proof = profile?.proof, let deviceBinding,
+              AppleAccountProof.isBound(proof, to: deviceBinding) else { return nil }
+        return proof
+    }
+    public var canLinkDevices: Bool { accountProof != nil }
+    public var usesWebSignIn: Bool { isSignedIn && profile?.method == "web" }
     public var isConfigured: Bool {
         Bundle.main.object(forInfoDictionaryKey: "SoundboundAppleSignInConfigured") as? Bool == true
     }
@@ -109,13 +149,18 @@ public final class AppleAccount: NSObject, ObservableObject, ASAuthorizationCont
     }
     public func prepare(_ request: ASAuthorizationAppleIDRequest) {
         generation = UUID()
+        isCheckingCredential = false
         let state = UUID().uuidString
         expectedState = state
         request.state = state
         request.requestedScopes = [.fullName, .email]
         // Bind the authorization to a fresh request. A future account backend
         // must independently verify Apple's token and nonce before granting access.
-        request.nonce = SHA256.hash(data: Data(UUID().uuidString.utf8)).map { String(format: "%02x", $0) }.joined()
+        signInBoundTo = deviceBinding
+        // Bound to this device's key so the signed token proves "this account, on this device". Without a
+        // loaded identity it falls back to a random value and no proof is kept.
+        request.nonce = deviceBinding.map(AppleAccountProof.nonce(forDevice:))
+            ?? SHA256.hash(data: Data(UUID().uuidString.utf8)).map { String(format: "%02x", $0) }.joined()
         isBusy = true; message = nil
     }
     public func complete(_ result: Result<ASAuthorization, Error>) {
@@ -130,9 +175,16 @@ public final class AppleAccount: NSObject, ObservableObject, ASAuthorizationCont
             }
             let old = profile.flatMap { $0.user == credential.user ? $0 : nil }
             let formatted = credential.fullName.map { PersonNameComponentsFormatter().string(from: $0) }
-            let name = formatted.flatMap { $0.isEmpty ? nil : $0 } ?? old?.name
-            let fresh = Profile(user: credential.user, name: name, email: credential.email ?? old?.email, method: "native")
-            // This is display metadata, not a stored bearer credential.
+            // Apple sends the name only the very first time an account authorises this app, so fall back to what
+            // is already known: the saved profile, then the name on this Mac's user account.
+            let name = formatted.flatMap { $0.isEmpty ? nil : $0 } ?? old?.name ?? Self.deviceOwnerName
+            let rawToken = credential.identityToken.flatMap { String(data: $0, encoding: .utf8) }
+            let token = signInBoundTo != nil ? rawToken : nil
+            // The email, unlike the name, is in every identity token.
+            let address = credential.email ?? old?.email ?? rawToken.flatMap(Self.emailClaim)
+            let fresh = Profile(user: credential.user, name: name, email: address, method: "native", proof: token)
+            // Display metadata plus the device-bound identity token. The token is an assertion about this
+            // device's key only; it is not an access or refresh token and grants nothing at Apple.
             if let data = try? JSONEncoder().encode(fresh) { defaults.set(data, forKey: Self.profileKey) }
             displayName = fresh.name; email = fresh.email
             isSignedIn = true
@@ -144,19 +196,23 @@ public final class AppleAccount: NSObject, ObservableObject, ASAuthorizationCont
         }
     }
     public func refreshCredential() {
-        guard !isBusy, let profile else { return }
+        if expireWebSignInIfNeeded() { return }
+        guard !isBusy, !isCheckingCredential, let profile else { return }
         if profile.method == "web" {
             isSignedIn = verifiedWebUser == profile.user && (webVerifiedUntil ?? .distantPast) > Date()
             return
         }
         guard isConfigured else { return }
+        isCheckingCredential = true
         let requestedGeneration = generation
         ASAuthorizationAppleIDProvider().getCredentialState(forUserID: profile.user) { [weak self] state, error in
             DispatchQueue.main.async {
                 guard let self, self.generation == requestedGeneration,
                       self.profile?.user == profile.user, self.profile?.method != "web" else { return }
+                self.isCheckingCredential = false
                 if state == .authorized {
-                    self.displayName = profile.name; self.email = profile.email; self.isSignedIn = true
+                    self.displayName = profile.name ?? Self.deviceOwnerName
+                    self.email = profile.email ?? profile.proof.flatMap(Self.emailClaim); self.isSignedIn = true
                 } else if error == nil {
                     self.signOut()
                 } else {
@@ -168,16 +224,26 @@ public final class AppleAccount: NSObject, ObservableObject, ASAuthorizationCont
     }
     public func cancelSignIn() {
         generation = UUID()
+        isCheckingCredential = false
         let pending = authorizationController
         clearAuthorization()
         pending?.cancel()
         webSession?.cancel(); webSession = nil
         webExchange?.cancel(); webExchange = nil
+        webSignInDeadline = nil
         expectedState = nil; isBusy = false
         message = nil
     }
+    @discardableResult
+    private func expireWebSignInIfNeeded() -> Bool {
+        guard let deadline = webSignInDeadline, Date() >= deadline else { return false }
+        cancelSignIn()
+        message = "This sign-in attempt timed out. Choose Use another Apple Account to start again. Your existing Soundbound account has not changed."
+        return true
+    }
     public func signOut() {
         cancelSignIn()
+        isCheckingCredential = false
         verifiedWebUser = nil; webVerifiedUntil = nil
         defaults.removeObject(forKey: Self.profileKey)
         displayName = nil; email = nil; isSignedIn = false; isBusy = false; expectedState = nil; message = nil
@@ -195,13 +261,23 @@ public final class AppleAccount: NSObject, ObservableObject, ASAuthorizationCont
             message = "Open Soundbound’s Settings window, then try again."
             return
         }
-        signOut()
+        // Keep the current account until the replacement has been verified.
+        // Cancelling or failing account selection must not sign the user out.
         let attempt = UUID(); generation = attempt
+        isCheckingCredential = false
         let state = Self.randomURLToken()
         let verifier = Self.randomURLToken()
-        let nonce = Self.randomURLToken()
+        let binding = deviceBinding
+        let nonce = binding.map(AppleAccountProof.nonce(forDevice:)) ?? Self.randomURLToken()
         let challenge = Data(SHA256.hash(data: Data(verifier.utf8))).base64URLEncoded
         expectedState = state; authorizationWindow = window; isBusy = true
+        webSignInDeadline = Date().addingTimeInterval(9 * 60)
+        let timeout = DispatchWorkItem { [weak self] in
+            guard let self, self.generation == attempt else { return }
+            self.expireWebSignInIfNeeded()
+        }
+        authorizationTimeout = timeout
+        DispatchQueue.main.asyncAfter(deadline: .now() + 9 * 60, execute: timeout)
         var components = URLComponents(url: startURL, resolvingAgainstBaseURL: false)!
         components.queryItems = [URLQueryItem(name: "state", value: state),
                                  URLQueryItem(name: "code_challenge", value: challenge),
@@ -209,6 +285,9 @@ public final class AppleAccount: NSObject, ObservableObject, ASAuthorizationCont
         let session = ASWebAuthenticationSession(url: components.url!, callbackURLScheme: "soundbound") { [weak self] url, error in
             DispatchQueue.main.async {
                 guard let self, self.generation == attempt, self.isBusy else { return }
+                guard !self.expireWebSignInIfNeeded() else { return }
+                self.authorizationTimeout?.cancel(); self.authorizationTimeout = nil
+                self.webSignInDeadline = nil
                 self.webSession = nil
                 if let error {
                     self.cancelSignIn()
@@ -219,7 +298,7 @@ public final class AppleAccount: NSObject, ObservableObject, ASAuthorizationCont
                 }
                 switch AppleWebCallback.parse(url, expectedState: state) {
                 case .success(let code):
-                    self.redeem(code: code, verifier: verifier, startURL: startURL, attempt: attempt)
+                    self.redeem(code: code, verifier: verifier, startURL: startURL, attempt: attempt, binding: binding)
                 case .failure(let failure):
                     self.cancelSignIn()
                     self.message = failure.message
@@ -246,8 +325,9 @@ public final class AppleAccount: NSObject, ObservableObject, ASAuthorizationCont
         var name: String?
         var email: String?
         var expiresAt: TimeInterval
+        var deviceProof: String?
     }
-    private func redeem(code: String, verifier: String, startURL: URL, attempt: UUID) {
+    private func redeem(code: String, verifier: String, startURL: URL, attempt: UUID, binding: String?) {
         let endpoint = startURL.deletingLastPathComponent().appendingPathComponent("redeem")
         var request = URLRequest(url: endpoint)
         request.httpMethod = "POST"
@@ -268,7 +348,10 @@ public final class AppleAccount: NSObject, ObservableObject, ASAuthorizationCont
                     self.message = "Apple account verification failed. Please try again."
                     return
                 }
-                let profile = Profile(user: result.subject, name: result.name, email: result.email, method: "web")
+                let deviceProof = result.deviceProof.flatMap { token in
+                    binding == self.deviceBinding && token.utf8.count <= 4096 && binding.map({ AppleAccountProof.isBound(token, to: $0) }) == true ? token : nil
+                }
+                let profile = Profile(user: result.subject, name: result.name, email: result.email, method: "web", proof: deviceProof)
                 if let encoded = try? JSONEncoder().encode(profile) { self.defaults.set(encoded, forKey: Self.profileKey) }
                 self.verifiedWebUser = result.subject
                 self.webVerifiedUntil = Date(timeIntervalSince1970: min(result.expiresAt, Date().addingTimeInterval(3600).timeIntervalSince1970))
@@ -290,30 +373,64 @@ public struct AppleAccountView: View {
     @ObservedObject private var account = AppleAccount.shared
     @Environment(\.scenePhase) private var scenePhase
     public init() {}
+    private var signedOutText: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text("Sign in to Soundbound").font(.headline)
+            Text("Your devices signed in to the same Apple Account connect automatically when Soundbound is open on the same local network.")
+                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+        }
+    }
+    /// Narrow layouts: the button spans the card so it reads as the one thing to do.
+    private var wideSignInButton: some View {
+        AppleAuthorizationButton(account: account)
+            .frame(maxWidth: .infinity).frame(height: 46)
+            .disabled(account.isBusy || !account.isConfigured)
+    }
+    private var signInButton: some View {
+        AppleAuthorizationButton(account: account)
+            .frame(width: 200, height: 36)
+            .disabled(account.isBusy || !account.isConfigured)
+    }
     public var body: some View {
-        VStack(spacing: 12) {
+        VStack(alignment: .leading, spacing: 12) {
             if account.isSignedIn {
-                Label(account.displayName ?? "Signed in with Apple", systemImage: "person.crop.circle.fill").font(.headline)
-                if let email = account.email { Text(email).font(.subheadline).foregroundStyle(.secondary) }
-                if account.displayName != nil || account.email != nil {
-                    Text("Signed in on this device").font(.caption).foregroundStyle(.secondary)
+                HStack(spacing: 12) {
+                    Image(systemName: "person.crop.circle.fill").font(.system(size: 34)).foregroundStyle(.secondary)
+                    VStack(alignment: .leading, spacing: 2) {
+                        // A name when there is one, otherwise the email; never the same line twice.
+                        Text(account.displayName ?? account.email ?? "Signed in with Apple").font(.headline).lineLimit(1)
+                        if account.displayName != nil, let email = account.email {
+                            Text(email).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                        }
+                        Text(account.usesWebSignIn ? "Apple Account · Web sign-in" : "Apple Account · Native sign-in")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                    Spacer(minLength: 12)
+                    Button("Sign out") { account.signOut() }.buttonStyle(.bordered)
                 }
-                Button("Sign out") { account.signOut() }.buttonStyle(.bordered)
             } else {
-                AppleAuthorizationButton(account: account)
-                    .frame(width: 220, height: 44)
-                    .disabled(account.isBusy || !account.isConfigured)
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 16) { signedOutText; Spacer(minLength: 12); signInButton }
+                    VStack(alignment: .leading, spacing: 12) { signedOutText; wideSignInButton }
+                }
                 if !account.isConfigured {
                     Text("Apple sign-in needs the signed development build.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
             }
-            if account.isBusy {
-                Button("Cancel sign-in") { account.cancelSignIn() }.buttonStyle(.bordered)
+            if let message = account.message {
+                Text(message).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
-            if let message = account.message { Text(message).font(.caption).foregroundStyle(.secondary) }
+            if account.isWebConfigured {
+                Button(account.isBusy ? "Cancel sign-in" : "Use another Apple Account") {
+                    if account.isBusy { account.cancelSignIn() } else { account.useAnotherAccount() }
+                }
+                    .buttonStyle(.plain).font(.subheadline).foregroundStyle(Color.accentColor)
+                    .frame(maxWidth: .infinity, alignment: account.isSignedIn ? .leading : .center)
+                    .help("Opens Apple’s website so you can use a different account.")
+            }
         }
-        .frame(maxWidth: .infinity)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .onChange(of: scenePhase) { phase in if phase == .active { account.refreshCredential() } }
     }
 }

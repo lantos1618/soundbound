@@ -21,7 +21,7 @@ sequenceDiagram
 
 The offer, acceptance, discovery, device names and room layouts are signed where applicable but are not encrypted. An observer on the local network can read metadata and see traffic timing and size. PCM audio travels encrypted and is decrypted in receiver memory for playback.
 
-Paired-device playback is automatic by default. The receiver still authenticates the sender and sends a signed acceptance; it simply does not ask the user again. Pairing never opens a microphone. Holding a local input icon is a separate recording action.
+Trusted-device playback is automatic by default. Trust comes from manual pairing approval or mutual Apple-signed, device-bound account verification on the local network. Account hints alone never grant trust. The receiver still authenticates the sender and sends a signed acceptance; it simply does not ask the user again. Linking never opens a microphone. Holding a local input icon is a separate recording action. See [account linking](APPLE-SIGN-IN.md#linking-a-persons-own-devices) for proof lifetime and sign-out behavior.
 
 ## What the primitives provide
 

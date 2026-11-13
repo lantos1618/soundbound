@@ -88,6 +88,25 @@ test('unknown state cannot reach token exchange', async () => {
   assert.equal((await handleAppleAuth(request,env,new MemoryStorage(),{now,fetch:()=>{fetched=true;}})).status,400);
   assert.equal(fetched,false);
 });
+test('device-bound sign-in returns only its verified ID proof through one-use PKCE redemption', async () => {
+  const store = new MemoryStorage(), state = 's'.repeat(43), verifier = 'v'.repeat(43);
+  const nonce = 'a'.repeat(64), proof = await jwt({nonce});
+  await store.put(`flow:${state}`, {clientState: 'client-state', nonce, challenge: await hash(verifier), expires: now + 60000});
+  const request = new Request(env.APPLE_AUTH_CALLBACK_URL, {method: 'POST', headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+    body: new URLSearchParams({state, code: 'apple-code'})});
+  const response = await handleAppleAuth(request, env, store, {now,
+    fetch: async url => url.endsWith('/auth/keys') ? keyFetch() : Response.json({id_token: proof, access_token: 'private-access', refresh_token: 'private-refresh'})});
+  const code = new URL(response.headers.get('Location')).searchParams.get('code');
+  assert.ok(code);
+  assert.ok(!response.headers.get('Location').includes(proof), 'The browser callback must contain only a one-use code');
+  const redeem = () => new Request('https://auth.example.com/apple/redeem', {method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({code, code_verifier: verifier})});
+  const profile = await (await handleAppleAuth(redeem(), env, store, {now})).json();
+  assert.equal(profile.deviceProof, proof);
+  assert.ok(!JSON.stringify(profile).includes('private-access'));
+  assert.ok(!JSON.stringify(profile).includes('private-refresh'));
+  assert.equal((await handleAppleAuth(redeem(), env, store, {now})).status, 401);
+});
 
 test('unknown routes never invoke the Durable Object', async () => {
   let invoked=false;

@@ -31,7 +31,8 @@ extension HubStore {
     func mergeRoomLayouts(_ layouts: [RoomLayout], from owner: String) -> Bool {
         guard friends.contains(where: { $0.id == owner }), layouts.count <= 64,
               Set(layouts.map { $0.room.id }).count == layouts.count,
-              layouts.allSatisfy({ $0.room.owner == owner && $0.room.name.count <= 60 && $0.room.region.count <= 60 && $0.hosts.count <= 64 && $0.components.count <= 128 }),
+              layouts.allSatisfy({ $0.room.owner == owner && $0.room.name.count <= 60 && $0.room.region.count <= 60 && $0.hosts.count <= 64 && $0.components.count <= 128 &&
+                  ($0.room.guests ?? []).count <= 64 && ($0.room.guests ?? []).allSatisfy { $0.name.count <= 60 && $0.id.count <= 128 } }),
               !layouts.contains(where: { layout in rooms.contains { $0.id == layout.room.id && $0.owner != owner } }) else { return false }
         let old = Set(rooms.filter { $0.owner == owner }.map(\.id))
         let incoming = Set(layouts.map { $0.room.id })

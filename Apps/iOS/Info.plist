@@ -33,7 +33,7 @@
 		<string>audio</string>
 	</array>
 	<key>NSCameraUsageDescription</key>
-	<string>Scan a friend’s Soundbound invitation code. Camera images are not saved or sent.</string>
+	<string>Scan invitation codes and use LiDAR or camera tracking to place devices in your room. Room tracking maps stay on this iPhone; camera images are not shared.</string>
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>

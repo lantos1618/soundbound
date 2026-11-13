@@ -2,6 +2,10 @@
 
 Soundbound keeps reported device state separate from requested changes. A request does not prove a connection or route change.
 
+Signed device inventories include recent, measured playback activity for local components. Other devices show that activity on the corresponding remote rows and room, without relaying microphone levels or echoing received metadata. Activity refreshes every second while audio is active (five seconds while idle), clears on disconnect or a stopped report, and expires after seven seconds without an update. Room membership remains visible using remembered built-in components while their host is away. Hardware volume and the local Send level remain separate controls.
+
+The iPhone speaker uses a stable component ID and remains listed when another route is selected. An unselected speaker is marked unavailable for playback; listing it does not switch iOS's audio route. Partial inventories preserve remembered built-in hardware. Developer mode adds an Audio map in Settings and the main header: select nodes to inspect capture, PCM format, gain, encryption, observed TCP interfaces, receiver buffering, and output state. It reports unobserved paths as unconnected and never displays encryption keys.
+
 ## Identity
 
 Each host reconciles its device inventory before rendering or sharing it. Repeated IDs become one row. Explicit Bluetooth addresses normalize case and separators. Input and output profiles merge only when their platform supplies a shared physical identity. The available/selected report takes precedence over a saved disconnected report.

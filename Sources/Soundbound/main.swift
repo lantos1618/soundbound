@@ -42,6 +42,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let model = SoundModel()
     private let hub = HubStore()
     private let mixer = AppMixer()
+    private var applicationAudio: AnyObject?
+    private var levelMonitor: AnyObject?
+    private var lastMonitorLevel = Date.distantPast
     private let quickPopover = NSPopover()
     private var hubWindow: NSWindow?
     private var item: NSStatusItem!
@@ -53,6 +56,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
         installApplicationMenu()
+        model.playbackGain = { [weak self] in self?.hub.audioGain(for: $0) ?? 1 }
+        hub.onPlaybackGainChanged = { [weak self] id, gain in self?.model.setPlaybackGain(id, level: gain) }
+        // Lets the audio map name what is making sound on this Mac even when nothing is shared to a room.
+        hub.playingApplications = { [weak self] in
+            guard let self, self.mixer.supported else { return [] }
+            self.mixer.refresh()
+            return self.mixer.apps.map { $0.name.replacingOccurrences(of: #"\s+Helper(\s*\(.*\))?$"#, with: "", options: .regularExpression) }
+        }
+        if #available(macOS 14.2, *) {
+            let emitter = MacApplicationAudio()
+            applicationAudio = emitter
+            emitter.onPCM = { [weak self] in self?.hub.roomAudio.appendApplicationPCM($0) }
+            emitter.onError = { [weak self] in self?.hub.applicationAudioFailed($0) }
+            hub.onApplicationAudioStart = { [weak emitter] in emitter?.start() }
+            hub.onApplicationAudioStop = { [weak emitter] in emitter?.stop() }
+            // If this Mac was left in a room and is set to send, pick up where it left off.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in self?.hub.startSharingIfAllowed() }
+            // A second, listen-only tap so the audio map can draw what the Mac is playing even when nothing is shared.
+            let monitor = MacApplicationAudio()
+            levelMonitor = monitor
+            monitor.onPCM = { [weak self] pcm in
+                DispatchQueue.main.async {
+                    guard let self, Date().timeIntervalSince(self.lastMonitorLevel) > 0.05 else { return }
+                    self.lastMonitorLevel = Date()
+                    self.hub.activity.updateLevel(HubStore.monitorLevelID, pcm: pcm)
+                }
+            }
+            hub.onLevelMonitor = { [weak self, weak monitor] on in
+                if on { monitor?.start() } else { monitor?.stop(); self?.hub.activity.clear(HubStore.monitorLevelID) }
+            }
+        }
         hub.onAudioNotice = { [weak self] message in
             guard let self, !(NSApp.isActive && self.hubWindow?.isVisible == true) else { return }
             self.showEventToast(message)
@@ -126,6 +160,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             window.title = "Soundbound"
             window.titleVisibility = .hidden
             window.titlebarAppearsTransparent = true
+            // Match the shared canvas so the transparent title bar is not a white strip above it.
+            window.backgroundColor = NSColor(name: nil) { appearance in
+                appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+                    ? NSColor(srgbRed: 0.07, green: 0.07, blue: 0.08, alpha: 1) : NSColor(srgbRed: 0.949, green: 0.949, blue: 0.969, alpha: 1)
+            }
             window.isReleasedWhenClosed = false
             window.contentViewController = NSHostingController(rootView: DesktopHubView(store: hub, audio: model))
             if !window.setFrameUsingName("SoundboundMainWindow.v2") { window.center() }

@@ -88,7 +88,12 @@ extension HubStore {
         seenMoveRequests[request.id] = Date()
         deviceMoveRequest = request; moveReply = respond
         audioNotice = "\(request.deviceName) is requesting a move from \(request.senderName) to \(name)."
+        DispatchQueue.main.asyncAfter(deadline: .now() + 30) { [weak self] in self?.expireDeviceMoveRequest(request.id) }
         return true
+    }
+    func expireDeviceMoveRequest(_ id: String) {
+        guard deviceMoveRequest?.id == id else { return }
+        decideDeviceMove(approve: false)
     }
     public func decideDeviceMove(approve: Bool) {
         guard let request = deviceMoveRequest, let identity else { return }

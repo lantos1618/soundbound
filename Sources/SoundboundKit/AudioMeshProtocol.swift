@@ -13,6 +13,8 @@ struct AudioOffer: Codable {
     var source = "microphone"
     var outputID: String? = nil
     var recordingID: String? = nil
+    var roomID: String? = nil
+    var sourceID: String? = nil
 }
 struct AudioReply: Codable {
     var kind = "audio-reply"
@@ -34,6 +36,8 @@ struct AudioWirePacket: Codable {
     var kind: String
     var sequence: UInt64
     var pcm: Data?
+    var pingID: String? = nil
+    var echo: Bool? = nil
 }
 enum AudioMeshError: LocalizedError {
     case invalid, unauthorized, expired, disconnected, denied, microphone, busy
@@ -69,10 +73,10 @@ struct AudioSessionCipher {
             sharedInfo: Data("sink-to-source".utf8), outputByteCount: 32)
         return (forward, reverse)
     }
-    mutating func seal(kind: String, pcm: Data? = nil) throws -> Data {
+    mutating func seal(kind: String, pcm: Data? = nil, pingID: String? = nil, echo: Bool? = nil) throws -> Data {
         guard sequence < UInt64.max, pcm == nil || (pcm!.count <= 9_600 && pcm!.count % 2 == 0) else { throw AudioMeshError.invalid }
         sequence += 1
-        let packet = AudioWirePacket(kind: kind, sequence: sequence, pcm: pcm)
+        let packet = AudioWirePacket(kind: kind, sequence: sequence, pcm: pcm, pingID: pingID, echo: echo)
         let bytes = try JSONEncoder().encode(packet)
         guard let combined = try AES.GCM.seal(bytes, using: key, authenticating: context).combined else { throw AudioMeshError.invalid }
         return combined
@@ -82,6 +86,7 @@ struct AudioSessionCipher {
         let plain = try AES.GCM.open(AES.GCM.SealedBox(combined: data), using: key, authenticating: context)
         let packet = try JSONDecoder().decode(AudioWirePacket.self, from: plain)
         guard packet.sequence > received, ["hello", "audio", "ping", "stop"].contains(packet.kind),
+              (packet.pingID == nil && packet.echo == nil) || (packet.kind == "ping" && packet.pingID.flatMap(UUID.init(uuidString:)) != nil && packet.echo != nil),
               packet.pcm == nil || (packet.pcm!.count <= 9_600 && packet.pcm!.count % 2 == 0),
               packet.kind != "audio" || packet.pcm?.isEmpty == false else { throw AudioMeshError.invalid }
         received = packet.sequence
